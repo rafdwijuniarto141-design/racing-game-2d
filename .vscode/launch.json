@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "msedge",
+            "request": "launch",
+            "name": "Launch Racing Game 2D (Edge, file://)",
+            "file": "${workspaceFolder}/Racing_Game_2D_SUPERCAR_ENGINE_LOUDER_FLY_TIMER_REVISED.html",
+            "webRoot": "${workspaceFolder}"
+        }
+    ]
+}
