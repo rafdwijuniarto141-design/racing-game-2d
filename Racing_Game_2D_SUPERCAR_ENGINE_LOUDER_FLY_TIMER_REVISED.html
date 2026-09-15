@@ -763,6 +763,7 @@ canvas{
     cursor:pointer;padding:0;
 }
 .vehicle-color-swatch.active{border-color:#facc15;box-shadow:0 0 0 2px #05070d,0 0 0 4px #facc15}
+.garage-slot-tab.active-slot-tab{background:#facc15!important;color:#111318!important}
 @media(max-width:520px){.vehicle-model-grid{grid-template-columns:1fr}}
 
 </style>
@@ -1079,8 +1080,8 @@ style="width:100%;margin-top:10px">
       <h3>🏁 SUPERCAR &amp; WARNA</h3>
       <p style="font-size:12px;color:#9bb1c8;margin:0 0 10px">Pilih model mobil 3D asli dan warna cat bodi. Pratinjau menampilkan model, warna, kaca, dan lampu yang sebenarnya.</p>
       <div id="garageSlotTabs" style="display:none;gap:8px;margin-bottom:10px">
-        <button type="button" data-slot="p1" class="btn" style="flex:1;padding:8px;background:#1b344e;color:#fff">P1</button>
-        <button type="button" data-slot="p2" class="btn" style="flex:1;padding:8px;background:#1b344e;color:#fff">P2</button>
+        <button type="button" data-slot="p1" class="btn garage-slot-tab" style="flex:1;padding:8px;background:#1b344e;color:#fff">P1 (WASD)</button>
+        <button type="button" data-slot="p2" class="btn garage-slot-tab" style="flex:1;padding:8px;background:#1b344e;color:#fff">P2 (Panah)</button>
       </div>
       <div class="vehicle-garage-layout">
         <div>
@@ -2846,6 +2847,20 @@ function startGame(){
 
     player.color =
     selectedColor;
+
+    // STEP A4 fix: init3DCarLayer() builds car1/car2 once, immediately at
+    // page load - before the Garage script (which runs later in document
+    // order) has applied any persisted/selected vehicleId. Body COLOR
+    // still ends up correct because syncCarToPlayer() re-tints it every
+    // frame from player.color/player2.color (set fresh right here), but
+    // the GLB MODEL itself is only chosen once at build time with nothing
+    // to re-check it later - so picking a non-default model (Toy Racer)
+    // silently kept rendering the default Ferrari. Force both cars to
+    // rebuild with the current selection on every actual race start.
+    if(typeof window.set3DCarModel === "function"){
+        window.set3DCarModel("car1", selectedColor, typeof selectedVehicleId !== "undefined" ? selectedVehicleId : undefined);
+        window.set3DCarModel("car2", player2.color, typeof player2VehicleId !== "undefined" ? player2VehicleId : undefined);
+    }
 
     player.x = 455;
 
@@ -8142,6 +8157,11 @@ preview();
     const FAR_SKYLINE_COUNT_PER_SIDE = 7;
     const FAR_SKYLINE_RANGE = FAR_SKYLINE_COUNT_PER_SIDE * FAR_SKYLINE_PERIOD;
     const FAR_SKYLINE_MIN_Z = -10;
+    // STEP A4: a third, farthest silhouette skyline row for extra depth.
+    const FARTHEST_SKYLINE_PERIOD = 38;
+    const FARTHEST_SKYLINE_COUNT_PER_SIDE = 6;
+    const FARTHEST_SKYLINE_RANGE = FARTHEST_SKYLINE_COUNT_PER_SIDE * FARTHEST_SKYLINE_PERIOD;
+    const FARTHEST_SKYLINE_MIN_Z = -10;
     const LAMP_PERIOD = 16;
     const LAMP_COUNT_PER_SIDE = 10;
     const LAMP_RANGE = LAMP_COUNT_PER_SIDE * LAMP_PERIOD;
@@ -8552,6 +8572,7 @@ preview();
     let buildingSlots = [];
     let lampSlots = [];
     let farSkylineSlots = [];
+    let farthestSkylineSlots = [];
     let bridgeSlot = null;
     let tunnelSlot = null;
     let signSlots = [];
@@ -9229,6 +9250,37 @@ preview();
             group.add(shoulder);
         });
 
+        // STEP A4: solid white road-edge line at the asphalt/shoulder
+        // boundary (previously only the center lane dashes existed - the
+        // road edge itself had no marking), plus alternating red/white
+        // curb blocks along the shoulder, the classic race-circuit "rumble
+        // strip" look. Both use the same bend/curve-offset technique as
+        // the rest of the road surface.
+        const edgeLineMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.5, emissive: 0x30302a, emissiveIntensity: 0.15 });
+        [-1, 1].forEach(function(side){
+            const edgeGeo = bendFlatPlane(new THREE.PlaneGeometry(0.12, roadLength, 1, lengthSegments), roadCenterZ);
+            const edgeLine = new THREE.Mesh(edgeGeo, edgeLineMaterial);
+            edgeLine.rotation.x = -Math.PI / 2;
+            edgeLine.position.set(side * WORLD_ROAD_HALF_WIDTH, 0.003, roadCenterZ);
+            group.add(edgeLine);
+        });
+
+        const curbRedMaterial = new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.55 });
+        const curbWhiteMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.5 });
+        const CURB_BLOCK_LEN = 1.6;
+        const curbBlockCount = Math.round(roadLength / CURB_BLOCK_LEN);
+        [-1, 1].forEach(function(side){
+            for(let i = 0; i < curbBlockCount; i++){
+                const blockZ = i * CURB_BLOCK_LEN - 15;
+                const curb = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.4, 0.09, CURB_BLOCK_LEN * 0.92),
+                    (i % 2 === 0) ? curbRedMaterial : curbWhiteMaterial
+                );
+                curb.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.1) + roadCurveOffset(blockZ), 0.045, blockZ);
+                group.add(curb);
+            }
+        });
+
         const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x1d6b3c, roughness: 1 });
         [-1, 1].forEach(function(side){
             const grassGeo = bendFlatPlane(new THREE.PlaneGeometry(10, roadLength, 1, lengthSegments), roadCenterZ);
@@ -9236,6 +9288,26 @@ preview();
             grass.rotation.x = -Math.PI / 2;
             grass.position.set(side * (WORLD_ROAD_HALF_WIDTH + 5.6), -0.01, roadCenterZ);
             group.add(grass);
+        });
+
+        // STEP A4: a second, lower Armco-style guardrail sits between the
+        // curb and the existing red/white barrier rail — a distinct
+        // silver W-beam layer rather than just repeating the same red
+        // barrier, so the roadside reads as a real multi-layer circuit
+        // safety setup instead of one wall.
+        const guardRailMaterial = new THREE.MeshStandardMaterial({ color: 0xc4cbd4, roughness: 0.35, metalness: 0.75 });
+        [-1, 1].forEach(function(side){
+            const guardGeo = bendUprightBox(new THREE.BoxGeometry(0.1, 0.22, roadLength, 1, 1, lengthSegments), roadCenterZ);
+            const guard = new THREE.Mesh(guardGeo, guardRailMaterial);
+            guard.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.32), 0.24, roadCenterZ);
+            group.add(guard);
+
+            for(let i = 0; i < 22; i++){
+                const postZ = i * 10 - 12;
+                const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.3, 0.06), guardRailMaterial);
+                post.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.32) + roadCurveOffset(postZ), 0.1, postZ);
+                group.add(post);
+            }
         });
 
         const barrierRailMaterial = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, metalness: 0.2 });
@@ -9348,9 +9420,9 @@ preview();
                 // pass — a real street-canyon presence on both sides
                 // instead of a distant, sparse skyline.
                 const bw = 3.4 + (seed % 4) * 1.4;
-                const bh = 9 + (seed % 6) * 4.2;
-                const bd = 4.2 + (seed % 2) * 1.5;
-                const bx = side * (WORLD_ROAD_HALF_WIDTH + 4 + (seed % 3) * 1.3);
+                const bh = 8 + (seed % 8) * 4.6;
+                const bd = 4.2 + (seed % 3) * 1.6;
+                const bx = side * (WORLD_ROAD_HALF_WIDTH + 3.6 + (seed % 4) * 1.5);
                 const isGlassTower = seed % 2 === 0;
 
                 const building = new THREE.Mesh(
@@ -9370,17 +9442,23 @@ preview();
                 // positions relative to its own center) so they scroll
                 // together with it when layoutEnvironment() repositions
                 // the building each frame, instead of detaching from it.
+                // Two window columns per floor (both -bd/4 and +bd/4)
+                // instead of one alternating column, and a lighter skip
+                // frequency (every 4th dark instead of every 3rd) - a much
+                // denser, more "occupied tower at night" facade.
                 const floors = Math.max(4, Math.floor(bh / 2.2));
                 for(let w = 0; w < floors; w++){
-                    if((seed + w) % 3 === 0) continue;
-                    const win = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.55, 0.05), windowMaterial);
-                    win.position.set(
-                        (side > 0 ? -bw / 2 - 0.03 : bw / 2 + 0.03),
-                        (1.4 + w * 2.1) - bh / 2,
-                        (w % 2 === 0 ? -bd / 4 : bd / 4)
-                    );
-                    win.rotation.y = Math.PI / 2;
-                    building.add(win);
+                    [-1, 1].forEach(function(col){
+                        if((seed + w + (col > 0 ? 2 : 0)) % 4 === 0) return;
+                        const win = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.55, 0.05), windowMaterial);
+                        win.position.set(
+                            (side > 0 ? -bw / 2 - 0.03 : bw / 2 + 0.03),
+                            (1.4 + w * 2.1) - bh / 2,
+                            col * bd / 4
+                        );
+                        win.rotation.y = Math.PI / 2;
+                        building.add(win);
+                    });
                 }
 
                 // Bright ground-floor storefront strip for street-level glow.
@@ -9439,7 +9517,11 @@ preview();
 
         // Distant background skyline: a second, sparser, unlit row set
         // further back for real depth/parallax behind the near buildings,
-        // instead of the city stopping abruptly at one row.
+        // instead of the city stopping abruptly at one row. STEP A4 adds
+        // a few window-speckle emissives per tower plus a third, even
+        // further/hazier silhouette row for additional depth.
+        const farWindowMaterial = new THREE.MeshStandardMaterial({ color: 0xd6b46a, emissive: 0xd6b46a, emissiveIntensity: 0.6 });
+        const farthestSkylineMaterial = new THREE.MeshStandardMaterial({ color: 0x03050b, roughness: 1 });
         farSkylineSlots = [];
         [-1, 1].forEach(function(side){
             for(let i = 0; i < FAR_SKYLINE_COUNT_PER_SIDE; i++){
@@ -9454,7 +9536,30 @@ preview();
                 );
                 building.position.set(bx, bh / 2, 0);
                 group.add(building);
+
+                for(let s = 0; s < 5; s++){
+                    if((seed + s) % 2 === 0) continue;
+                    const speck = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.35, 0.04), farWindowMaterial);
+                    speck.position.set(0, (s * bh / 5) - bh / 2 + 1, bw / 2 + 0.02);
+                    building.add(speck);
+                }
+
                 farSkylineSlots.push({ mesh: building, side: side, baseIndex: i, baseX: bx });
+            }
+        });
+
+        farthestSkylineSlots = [];
+        [-1, 1].forEach(function(side){
+            for(let i = 0; i < FARTHEST_SKYLINE_COUNT_PER_SIDE; i++){
+                const seed = i + (side > 0 ? 30 : 0);
+                const bw = 5 + (seed % 4) * 2.5;
+                const bh = 20 + (seed % 6) * 8;
+                const bx = side * (WORLD_ROAD_HALF_WIDTH + 30 + (seed % 3) * 4);
+
+                const building = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bw), farthestSkylineMaterial);
+                building.position.set(bx, bh / 2, 0);
+                group.add(building);
+                farthestSkylineSlots.push({ mesh: building, side: side, baseIndex: i, baseX: bx });
             }
         });
 
@@ -9679,6 +9784,17 @@ preview();
             slot.mesh.position.x = slot.baseX + roadCurveOffset(zPos);
         });
 
+        let ftOffset = scrollWorld % FARTHEST_SKYLINE_RANGE;
+        if(ftOffset < 0) ftOffset += FARTHEST_SKYLINE_RANGE;
+
+        farthestSkylineSlots.forEach(function(slot){
+            let z = (slot.baseIndex * FARTHEST_SKYLINE_PERIOD - ftOffset) % FARTHEST_SKYLINE_RANGE;
+            if(z < 0) z += FARTHEST_SKYLINE_RANGE;
+            const zPos = FARTHEST_SKYLINE_MIN_Z + z;
+            slot.mesh.position.z = zPos;
+            slot.mesh.position.x = slot.baseX + roadCurveOffset(zPos);
+        });
+
         let lOffset = scrollWorld % LAMP_RANGE;
         if(lOffset < 0) lOffset += LAMP_RANGE;
 
@@ -9778,6 +9894,7 @@ preview();
         buildingSlots = [];
         lampSlots = [];
         farSkylineSlots = [];
+        farthestSkylineSlots = [];
         bridgeSlot = null;
         tunnelSlot = null;
         signSlots = [];
@@ -9879,10 +9996,15 @@ preview();
             camera.lookAt(0, 1, 20);
             camera.updateMatrixWorld(true);
 
-            scene.add(new THREE.HemisphereLight(0x9db4ff, 0x14100c, 0.55));
-            scene.add(new THREE.AmbientLight(0x8899bb, 0.35));
+            // STEP A4: conservative lighting-only tuning (no shadow mapping,
+            // no PMREM/env reflections re-enabled - both caused renderer
+            // instability in STEP A2/A3). Slightly stronger hemisphere fill
+            // and moonlight key with a touch less flat ambient keeps the
+            // scene readable while adding a bit more contrast/depth.
+            scene.add(new THREE.HemisphereLight(0x9db4ff, 0x14100c, 0.62));
+            scene.add(new THREE.AmbientLight(0x8899bb, 0.3));
 
-            const moonLight = new THREE.DirectionalLight(0xcfe0ff, 0.9);
+            const moonLight = new THREE.DirectionalLight(0xcfe0ff, 1.05);
             moonLight.position.set(-6, 14, 8);
             moonLight.target.position.set(0, 0, 14);
             scene.add(moonLight.target);
@@ -10359,14 +10481,22 @@ preview();
         }).join("");
     }
 
+    // STEP A4: always show the P1/P2 tabs (not gated on gameMode) so a
+    // player can set up P2's car before ever touching the mode buttons -
+    // gameMode is only known at the moment Garage happens to be opened,
+    // and there was no re-render hook for when it changes afterward, so a
+    // player who opened Garage first, then picked 2P, never saw the tabs.
+    // Editing P2's profile while 1P is selected is harmless - it just
+    // persists unused settings until 2P is chosen.
     function renderSlotTabs(){
         const host = document.getElementById("garageSlotTabs");
         if(!host) return;
-        host.style.display = (gameModeIsTwoPlayer() ? "flex" : "none");
-    }
+        host.style.display = "flex";
 
-    function gameModeIsTwoPlayer(){
-        return typeof gameMode !== "undefined" && gameMode === "2P";
+        const p1Tab = host.querySelector('[data-slot="p1"]');
+        const p2Tab = host.querySelector('[data-slot="p2"]');
+        if(p1Tab) p1Tab.classList.toggle("active-slot-tab", activeSlot === "p1");
+        if(p2Tab) p2Tab.classList.toggle("active-slot-tab", activeSlot === "p2");
     }
 
     function renderAll(){
