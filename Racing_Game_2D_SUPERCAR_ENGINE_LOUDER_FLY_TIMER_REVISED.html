@@ -8365,13 +8365,33 @@ preview();
     // tires, paint — looked like the same dull plastic. Returns "headlight"
     // or "taillight" when this node is a light-lens mesh, so the caller can
     // keep a reference for brake-light response.
-    function tuneVehicleMaterialByName(mat, name){
+    function tuneVehicleMaterialByName(mat, name, node){
         if(!mat) return null;
 
         if(/^(body|paint|carpaint)$/.test(name)){
-            mat.roughness = 0.35;
-            mat.metalness = 0.6;
-            mat.envMapIntensity = 1.1;
+            // STEP A5: MeshStandardMaterial has no clearcoat layer, so a
+            // plain roughness/metalness tune reads as flat metallic paint
+            // rather than glossy automotive lacquer. Swap the paint mesh's
+            // material to MeshPhysicalMaterial (same color, base metallic
+            // coat underneath a near-mirror clearcoat layer on top) - this
+            // is the one extra material TYPE introduced this STEP, kept
+            // deliberately isolated to just the paint mesh (not shadows,
+            // not PMREM/env maps) to avoid the renderer-instability class
+            // of bug found in STEP A2/A3.
+            if(node && !Array.isArray(node.material)){
+                const clearCoatPaint = new THREE.MeshPhysicalMaterial({
+                    color: mat.color.clone(),
+                    roughness: 0.3,
+                    metalness: 0.55,
+                    clearcoat: 1.0,
+                    clearcoatRoughness: 0.09,
+                    envMapIntensity: 1.1
+                });
+                node.material = clearCoatPaint;
+            }else{
+                mat.roughness = 0.3;
+                mat.metalness = 0.55;
+            }
             return null;
         }
 
@@ -8483,7 +8503,7 @@ preview();
 
                 const mats = Array.isArray(node.material) ? node.material : [node.material];
                 mats.forEach(function(mat){
-                    const role = tuneVehicleMaterialByName(mat, name);
+                    const role = tuneVehicleMaterialByName(mat, name, node);
                     if(role === "headlight" && !headlightMaterial) headlightMaterial = mat;
                     if(role === "taillight") taillightMaterials.push(mat);
                 });
@@ -9232,7 +9252,13 @@ preview();
         // in the scene, and now also picks up the procedural night env map
         // — a lightweight physically-plausible "wet road" look without a
         // flat fake-shine color hack or any extra texture asset.
-        const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x21242e, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.8 });
+        // STEP A5: tighter roughness / slightly higher metalness makes the
+        // moon/streetlamp/headlight specular highlights read as a wet
+        // night surface (a real, visible highlight streak under each
+        // light) rather than a uniformly dim matte road - achieved purely
+        // through material tuning against the existing light sources, no
+        // PMREM/env map involved.
+        const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x1c1f28, roughness: 0.4, metalness: 0.45, envMapIntensity: 0.8 });
         const roadGeo = bendFlatPlane(new THREE.PlaneGeometry(WORLD_ROAD_HALF_WIDTH * 2 + 0.6, roadLength, 1, lengthSegments), roadCenterZ);
         const roadPlane = new THREE.Mesh(roadGeo, roadMaterial);
         roadPlane.rotation.x = -Math.PI / 2;
@@ -9273,10 +9299,10 @@ preview();
             for(let i = 0; i < curbBlockCount; i++){
                 const blockZ = i * CURB_BLOCK_LEN - 15;
                 const curb = new THREE.Mesh(
-                    new THREE.BoxGeometry(0.4, 0.09, CURB_BLOCK_LEN * 0.92),
+                    new THREE.BoxGeometry(0.42, 0.15, CURB_BLOCK_LEN * 0.92),
                     (i % 2 === 0) ? curbRedMaterial : curbWhiteMaterial
                 );
-                curb.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.1) + roadCurveOffset(blockZ), 0.045, blockZ);
+                curb.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.1) + roadCurveOffset(blockZ), 0.075, blockZ);
                 group.add(curb);
             }
         });
@@ -9296,6 +9322,12 @@ preview();
         // barrier, so the roadside reads as a real multi-layer circuit
         // safety setup instead of one wall.
         const guardRailMaterial = new THREE.MeshStandardMaterial({ color: 0xc4cbd4, roughness: 0.35, metalness: 0.75 });
+        // Track-side delineator reflectors: a small amber/white emissive
+        // cap on every guard-rail post, alternating like real reflective
+        // roadside delineator posts, catching the headlight/moon/street-
+        // lamp light already in the scene.
+        const delineatorAmberMaterial = new THREE.MeshStandardMaterial({ color: 0xffb020, emissive: 0xffb020, emissiveIntensity: 1.1 });
+        const delineatorWhiteMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, emissive: 0xf5f5f5, emissiveIntensity: 0.8 });
         [-1, 1].forEach(function(side){
             const guardGeo = bendUprightBox(new THREE.BoxGeometry(0.1, 0.22, roadLength, 1, 1, lengthSegments), roadCenterZ);
             const guard = new THREE.Mesh(guardGeo, guardRailMaterial);
@@ -9304,9 +9336,17 @@ preview();
 
             for(let i = 0; i < 22; i++){
                 const postZ = i * 10 - 12;
+                const postX = side * (WORLD_ROAD_HALF_WIDTH + 0.32) + roadCurveOffset(postZ);
                 const post = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.3, 0.06), guardRailMaterial);
-                post.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.32) + roadCurveOffset(postZ), 0.1, postZ);
+                post.position.set(postX, 0.1, postZ);
                 group.add(post);
+
+                const reflector = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.05, 6, 6),
+                    (i % 2 === 0) ? delineatorAmberMaterial : delineatorWhiteMaterial
+                );
+                reflector.position.set(postX, 0.42, postZ);
+                group.add(reflector);
             }
         });
 
@@ -10300,7 +10340,7 @@ preview();
                     node.material = node.material.clone();
                 }
                 const mats = Array.isArray(node.material) ? node.material : [node.material];
-                mats.forEach(function(mat){ tuneVehicleMaterialByName(mat, name); });
+                mats.forEach(function(mat){ tuneVehicleMaterialByName(mat, name, node); });
 
                 const mat = Array.isArray(node.material) ? node.material[0] : node.material;
                 if(!paintIsExactMatch && mat && mat.color && /^(body|paint|carpaint)$/.test(name)){
