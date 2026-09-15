@@ -260,6 +260,141 @@ canvas{
     z-index:2;
 }
 
+/* STEP A8 — RPM / speed tachometer HUD overlay. */
+#rpmHudLayer{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+    z-index:3;
+}
+
+.rpm-gauge{
+    position:absolute;
+    right:2.2%;
+    bottom:2.2%;
+    width:32%;
+    max-width:186px;
+    min-width:118px;
+    background:rgba(5,9,18,.6);
+    border:1px solid #365773;
+    border-radius:14px;
+    backdrop-filter:blur(3px);
+    padding:6px 8px 8px;
+    box-sizing:border-box;
+    text-align:center;
+}
+
+.rpm-gauge-svg{
+    display:block;
+    width:100%;
+    height:auto;
+}
+
+.rpm-track{
+    fill:none;
+    stroke:#1c2534;
+    stroke-width:11;
+    stroke-linecap:round;
+}
+
+.rpm-redline{
+    fill:none;
+    stroke:#b91c1c;
+    stroke-width:11;
+    stroke-linecap:round;
+    opacity:.55;
+}
+
+.rpm-fill{
+    fill:none;
+    stroke:#facc15;
+    stroke-width:11;
+    stroke-linecap:round;
+    transition:stroke .15s linear;
+}
+
+.rpm-needle{
+    stroke:#f5f7fa;
+    stroke-width:3;
+    stroke-linecap:round;
+    transition:transform .09s ease-out;
+    transform-box:fill-box;
+}
+
+.rpm-hub{
+    fill:#0a0e17;
+    stroke:#9bb1c8;
+    stroke-width:1.5;
+}
+
+.rpm-readout{
+    margin-top:-30px;
+    font-weight:800;
+    color:#f5f7fa;
+    line-height:1;
+}
+.rpm-readout span{font-size:clamp(14px,2.6vw,20px)}
+.rpm-readout small{display:block;font-size:8px;letter-spacing:.14em;color:#9bb1c8;margin-top:1px}
+
+.speed-readout{
+    margin-top:3px;
+    font-weight:700;
+    color:#facc15;
+    line-height:1;
+}
+.speed-readout span{font-size:clamp(12px,2.1vw,16px)}
+.speed-readout small{display:block;font-size:7px;letter-spacing:.12em;color:#9bb1c8;margin-top:1px}
+
+.rpm-label{
+    position:absolute;
+    top:4px;
+    left:8px;
+    font-size:9px;
+    font-weight:800;
+    color:#9bb1c8;
+    letter-spacing:.08em;
+}
+
+.rpm-gauge-p2{
+    right:auto;
+    left:2.2%;
+    bottom:2.2%;
+    width:36%;
+    max-width:210px;
+    min-width:140px;
+    padding:7px 10px;
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+}
+.rpm-bar-track{
+    width:100%;
+    height:8px;
+    border-radius:5px;
+    background:#1c2534;
+    overflow:hidden;
+}
+.rpm-bar-fill{
+    height:100%;
+    width:0%;
+    background:#facc15;
+    border-radius:5px;
+    transition:width .12s linear,background .15s linear;
+}
+.rpm-bar-readout{
+    font-size:10px;
+    font-weight:700;
+    color:#e5e7eb;
+    display:flex;
+    justify-content:space-between;
+}
+.rpm-bar-readout small{color:#9bb1c8;font-weight:600;letter-spacing:.06em}
+
+@media(max-width:520px){
+    .rpm-gauge{width:38%;min-width:96px}
+    .rpm-gauge-p2{width:44%;min-width:120px}
+}
+
 
 /* =========================================================
    OVERLAY
@@ -940,6 +1075,35 @@ id="carLayer3D"
 width="1000"
 height="1000">
 </canvas>
+
+<!-- STEP A8 — RPM / speed tachometer HUD. Pure overlay: reads gameSpeed/
+     nitroActive/speedBoostActive (the same values already driving
+     updatePlayerEngineAudio's rpmNorm) each frame and never touches
+     physics/scoring. pointer-events:none so it never blocks input. -->
+<div id="rpmHudLayer">
+    <div id="rpmGaugeP1" class="rpm-gauge">
+        <svg viewBox="0 0 200 112" class="rpm-gauge-svg">
+            <path class="rpm-track" d="M18,100 A82,82 0 0 1 182,100"></path>
+            <path class="rpm-redline" d="M173.1,62.8 A82,82 0 0 1 182,100"></path>
+            <path id="rpmFillP1" class="rpm-fill" d="M18,100 A82,82 0 0 1 182,100"></path>
+            <line id="rpmNeedleP1" class="rpm-needle" x1="100" y1="100" x2="100" y2="24"></line>
+            <circle cx="100" cy="100" r="6.5" class="rpm-hub"></circle>
+        </svg>
+        <div class="rpm-readout">
+            <span id="rpmValueP1">0</span><small>RPM</small>
+        </div>
+        <div class="speed-readout">
+            <span id="speedValueP1">0</span><small>km/h</small>
+        </div>
+        <div class="rpm-label">P1</div>
+    </div>
+    <div id="rpmGaugeP2" class="rpm-gauge rpm-gauge-p2">
+        <div class="rpm-bar-track"><div id="rpmBarP2" class="rpm-bar-fill"></div></div>
+        <div class="rpm-bar-readout">
+            <span id="rpmValueP2">0</span><small>RPM · P2</small>
+        </div>
+    </div>
+</div>
 
 </div>
 
@@ -1687,6 +1851,16 @@ const resultText =
 document.getElementById(
     "resultText"
 );
+
+// STEP A8 — RPM/speed HUD element refs, cached once like the HUD refs
+// above instead of re-querying the DOM every frame in updateRpmHud().
+const rpmFillP1 = document.getElementById("rpmFillP1");
+const rpmNeedleP1 = document.getElementById("rpmNeedleP1");
+const rpmValueP1 = document.getElementById("rpmValueP1");
+const speedValueP1 = document.getElementById("speedValueP1");
+const rpmBarP2 = document.getElementById("rpmBarP2");
+const rpmValueP2 = document.getElementById("rpmValueP2");
+const RPM_GAUGE_ARC_LENGTH = Math.PI * 82;
 
 const leaderboardList =
 document.getElementById(
@@ -7389,6 +7563,46 @@ function updateHUD(){
 
     }
 
+    updateRpmHud();
+
+}
+
+
+// STEP A8 — RPM/speed tachometer HUD. Reuses the exact same gameSpeed-
+// based formula already proven for the engine audio's rpmNorm (see
+// updatePlayerEngineAudio above) instead of inventing a second speed
+// concept, so RPM only ever reflects gameSpeed/nitro/speed-boost — never
+// touches player physics. Fly does not zero gameSpeed, so RPM keeps
+// tracking normally while airborne with no special-case needed.
+function updateRpmHud(){
+    if(!rpmFillP1 || !rpmNeedleP1) return;
+
+    const speed = Math.max(0, Number(gameSpeed) || 0);
+    const boost1 = speedBoostActive ? 1 : 0;
+    const nitroBoost1 = nitroActive ? 1 : 0;
+    const baseNorm = Math.min(1, Math.max(0, (speed - 0.65) / 3.95));
+    const rpmNormP1 = Math.min(1, baseNorm + boost1 * 0.12 + nitroBoost1 * 0.20);
+
+    const RPM_IDLE = 900;
+    const RPM_MAX = 8200;
+    const rpmP1 = Math.round(RPM_IDLE + rpmNormP1 * (RPM_MAX - RPM_IDLE));
+    const speedKmhP1 = Math.round(speed * 85 + boost1 * 25 + nitroBoost1 * 35);
+
+    rpmNeedleP1.setAttribute("transform", "rotate(" + (-90 + rpmNormP1 * 180) + " 100 100)");
+    rpmFillP1.style.strokeDasharray = RPM_GAUGE_ARC_LENGTH + " " + RPM_GAUGE_ARC_LENGTH;
+    rpmFillP1.style.strokeDashoffset = String(RPM_GAUGE_ARC_LENGTH * (1 - rpmNormP1));
+    rpmFillP1.style.stroke = rpmNormP1 > 0.85 ? "#ef4444" : "#facc15";
+    if(rpmValueP1) rpmValueP1.textContent = String(rpmP1);
+    if(speedValueP1) speedValueP1.textContent = String(speedKmhP1);
+
+    if(rpmBarP2){
+        const boost2 = player2.speedBoostActive ? 1 : 0;
+        const rpmNormP2 = Math.min(1, baseNorm + boost2 * 0.12);
+        const rpmP2 = Math.round(RPM_IDLE + rpmNormP2 * (RPM_MAX - RPM_IDLE));
+        rpmBarP2.style.width = (rpmNormP2 * 100) + "%";
+        rpmBarP2.style.background = rpmNormP2 > 0.85 ? "#ef4444" : "#facc15";
+        if(rpmValueP2) rpmValueP2.textContent = String(rpmP2);
+    }
 }
 
 
@@ -8244,8 +8458,9 @@ preview();
     });
 
     // ================================================================
-    // REAL GLB VEHICLE ASSETS (STEP A3: Garage vehicle-model selection)
-    // Two verified, distinct, permissively-licensed models:
+    // REAL GLB VEHICLE ASSETS (STEP A3: Garage vehicle-model selection;
+    // STEP A8: expanded from 2 to 5)
+    // Five verified, distinct, permissively-licensed models:
     //  - "ferrari": three.js official example assets (mrdoob/three.js,
     //    MIT-licensed repo). Real-world scale already (2.26x1.24x4.53m);
     //    native front is local -Z (see its "lights"/"lights_red" mesh
@@ -8260,6 +8475,38 @@ preview();
     //    "ToyCar" body+wheel mesh as one piece, and its wheels do not
     //    spin independently — disclosed as a known asset limitation
     //    rather than hidden.
+    //  - "racer" / "hyperRacer" / "gtSport": Kenney "Car Kit"
+    //    (kenney.nl/assets/car-kit), CC0 1.0 Universal / public domain,
+    //    created by Kenney (kenney.nl). Retrieved as individual glTF-
+    //    Binary files from the shorepine/kenney GitHub mirror
+    //    (github.com/shorepine/kenney, 3d/car/race.glb,
+    //    3d/car/race-future.glb, 3d/car/sedan-sports.glb — a verbatim
+    //    re-packaging of the same official CC0 Kenney asset library,
+    //    confirmed CC0 independently on kenney.nl/assets/car-kit itself).
+    //    Stylized low-poly kit: each car is just a "body" mesh + 4 wheel
+    //    meshes (no separate glass/chrome/tire sub-meshes), sharing one
+    //    small flat-color-swatch atlas ("Textures/colormap.png", also
+    //    CC0, placed under assets/models/Textures/ since these 3 GLBs
+    //    reference it by relative URI rather than embedding it). The
+    //    "body" mesh name still matches tuneVehicleMaterialByName()'s
+    //    existing body/paint clearcoat branch, so per-player color
+    //    tinting works exactly like Ferrari's — no material-tuning code
+    //    changes were needed. Wheel meshes are named "wheel-front-left"
+    //    etc. (hyphenated), which does not match the existing wheel/tire
+    //    regexes, so they keep their imported flat-color material as-is
+    //    (a disclosed limitation: no independent chrome/tire tuning on
+    //    these 3 cars, consistent with the kit's own stylized look).
+    //    Bounding boxes measured directly from each GLB's accessor data
+    //    (mesh-local min/max + node translation, not eyeballed): native
+    //    front is local +Z (wheel-front-* nodes sit at positive local Z,
+    //    opposite of Ferrari/ToyCar), so yaw:Math.PI flips them to match;
+    //    wheel bottoms already sit exactly at local Y=0 in all three, so
+    //    no yOffset correction beyond Ferrari's own 0.005 anti-z-fighting
+    //    epsilon is needed. Each is scaled so its measured body width
+    //    matches the Ferrari's 2.26m:
+    //      race.glb:          1.3 x 0.733 x 2.56  -> scale 2.26/1.3 = 1.738
+    //      race-future.glb:   1.2 x 0.833 x 2.66  -> scale 2.26/1.2 = 1.883
+    //      sedan-sports.glb:  1.3 x 1.10  x 2.55  -> scale 2.26/1.3 = 1.738
     // Each caller falls back to the existing hand-built primitive
     // geometry if a GLB fails to load, so the game never renders an
     // empty car.
@@ -8299,6 +8546,36 @@ preview();
             yaw: 0,
             yOffset: -0.12,
             hideMeshNames: ["fabric"],
+            colors: VEHICLE_COLOR_PALETTE
+        },
+        {
+            id: "racer",
+            name: "Vortex GT",
+            source: "Kenney \"Car Kit\" (kenney.nl/assets/car-kit), CC0/public domain, by Kenney",
+            modelUrl: "assets/models/kenney_race.glb",
+            scale: 1.738,
+            yaw: Math.PI,
+            yOffset: 0.005,
+            colors: VEHICLE_COLOR_PALETTE
+        },
+        {
+            id: "hyperRacer",
+            name: "Hyperion X",
+            source: "Kenney \"Car Kit\" (kenney.nl/assets/car-kit), CC0/public domain, by Kenney",
+            modelUrl: "assets/models/kenney_race_future.glb",
+            scale: 1.883,
+            yaw: Math.PI,
+            yOffset: 0.005,
+            colors: VEHICLE_COLOR_PALETTE
+        },
+        {
+            id: "gtSport",
+            name: "Apex GTS",
+            source: "Kenney \"Car Kit\" (kenney.nl/assets/car-kit), CC0/public domain, by Kenney",
+            modelUrl: "assets/models/kenney_sedan_sports.glb",
+            scale: 1.738,
+            yaw: Math.PI,
+            yOffset: 0.005,
             colors: VEHICLE_COLOR_PALETTE
         }
     ];
@@ -10345,9 +10622,11 @@ preview();
                 // Deterministic per-instance model variety (derived from the
                 // enemy's own spawn speed, never written back to the 2D
                 // gameplay object) so traffic is not 100% one repeated
-                // model — a genuine minority of traffic uses the distinct
-                // "toycar" GLB rather than only recoloring the Ferrari.
-                const trafficVehicleId = Math.floor(e.speed) % 5 === 0 ? "toycar" : "ferrari";
+                // model — STEP A8: cycles through all 5 VEHICLE_LIBRARY
+                // models (previously just ferrari/toycar) so traffic
+                // visibly benefits from the expanded lineup too.
+                const trafficVehicleIds = VEHICLE_LIBRARY.map(function(v){ return v.id; });
+                const trafficVehicleId = trafficVehicleIds[Math.floor(e.speed * 13) % trafficVehicleIds.length];
                 return buildTrafficCar(e.color, trafficVehicleId);
             }, function(e){
                 return worldPosForBox(e);
