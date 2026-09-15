@@ -8052,6 +8052,95 @@ preview();
     let car1 = null;
     let car2 = null;
 
+    // ================================================================
+    // STEP A1 — FULL 3D WORLD: coordinate mapping + shared pools
+    // ================================================================
+    // The gameplay simulation stays entirely in its existing 2D
+    // coordinate system (player.x/y, enemies[], obstacles[], coins[],
+    // etc. are untouched). These constants define a fixed, independent
+    // linear projection of that 2D state into real 3D world space, so
+    // road/environment/traffic/cars all share one consistent 3D scene
+    // instead of a 2D canvas with a 3D car glued on top.
+    const WORLD_ROAD_LEFT_2D = 125;
+    const WORLD_ROAD_RIGHT_2D = 875;
+    const WORLD_ROAD_CENTER_2D = (WORLD_ROAD_LEFT_2D + WORLD_ROAD_RIGHT_2D) / 2;
+    const WORLD_ROAD_HALF_RANGE_2D = (WORLD_ROAD_RIGHT_2D - WORLD_ROAD_LEFT_2D) / 2;
+    const WORLD_ROAD_HALF_WIDTH = 4.2;
+    const WORLD_X_SCALE = WORLD_ROAD_HALF_WIDTH / WORLD_ROAD_HALF_RANGE_2D;
+    const WORLD_Z_SCALE = 0.045;
+    const WORLD_SCROLL_SCALE = 0.06;
+    const LANE_DASH_LEN = 2.2;
+    const LANE_GAP_LEN = 1.6;
+    const LANE_PERIOD = LANE_DASH_LEN + LANE_GAP_LEN;
+    const LANE_DASH_COUNT = 16;
+    const LANE_RANGE = LANE_DASH_COUNT * LANE_PERIOD;
+    const LANE_MIN_Z = -8;
+    const BUILDING_PERIOD = 22;
+    const BUILDING_COUNT_PER_SIDE = 9;
+    const BUILDING_RANGE = BUILDING_COUNT_PER_SIDE * BUILDING_PERIOD;
+    const BUILDING_MIN_Z = -10;
+    const LAMP_PERIOD = 16;
+    const LAMP_COUNT_PER_SIDE = 10;
+    const LAMP_RANGE = LAMP_COUNT_PER_SIDE * LAMP_PERIOD;
+    const LAMP_MIN_Z = -8;
+
+    function mapWorldX(cx2d){
+        return (cx2d - WORLD_ROAD_CENTER_2D) * WORLD_X_SCALE;
+    }
+
+    function mapWorldZ(cy2d){
+        const refY = player.y + player.height / 2;
+        return (refY - cy2d) * WORLD_Z_SCALE;
+    }
+
+    function worldPosForBox(obj){
+        return {
+            x: mapWorldX(obj.x + (obj.width || 0) / 2),
+            z: mapWorldZ(obj.y + (obj.height || 0) / 2)
+        };
+    }
+
+    function worldPosForPoint(obj){
+        return { x: mapWorldX(obj.x), z: mapWorldZ(obj.y) };
+    }
+
+    // Shared (non-per-instance) materials/geometries for traffic and
+    // pickups, built once and reused across every pooled 3D object
+    // instead of allocating new THREE.Material/Geometry per spawn.
+    const trafficWheelGeometry = new THREE.CylinderGeometry(0.34, 0.34, 0.26, 12);
+    const trafficWheelMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.1, roughness: 0.85 });
+    const trafficGlassMaterial = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.85, roughness: 0.15, transparent: true, opacity: 0.8 });
+    const trafficHeadlightMaterial = new THREE.MeshStandardMaterial({ color: 0xfff7d6, emissive: 0xfff7d6, emissiveIntensity: 1.3, roughness: 0.4 });
+    const trafficTaillightMaterial = new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 1.1, roughness: 0.4 });
+    const trafficLightGeometry = new THREE.BoxGeometry(0.3, 0.14, 0.06);
+
+    const barrierMaterial = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.2, roughness: 0.6 });
+    const barrierStripeMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.1, roughness: 0.8 });
+    const coinMaterial = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xfacc15, emissiveIntensity: 0.5, metalness: 0.8, roughness: 0.25 });
+    const speedBoostPickupMaterial = new THREE.MeshStandardMaterial({ color: 0xa855f7, emissive: 0xa855f7, emissiveIntensity: 0.8, roughness: 0.3 });
+    const lifePickupMaterial = new THREE.MeshStandardMaterial({ color: 0xf43f5e, emissive: 0xf43f5e, emissiveIntensity: 0.8, roughness: 0.3 });
+    const flyPickupMaterial5 = new THREE.MeshStandardMaterial({ color: 0xa78bfa, emissive: 0xa78bfa, emissiveIntensity: 0.9, roughness: 0.25 });
+    const flyPickupMaterial10 = new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x22d3ee, emissiveIntensity: 0.9, roughness: 0.25 });
+
+    // Pools mapping a live 2D gameplay object (used directly as a Map
+    // key) to its pooled 3D representation, so meshes are created once
+    // per spawned entity and disposed once it leaves the 2D arrays —
+    // the 2D arrays themselves remain the sole gameplay/collision state.
+    let trafficPool = new Map();
+    let obstaclePool = new Map();
+    let coinPool = new Map();
+    let speedBoostPool = new Map();
+    let lifeItemPool = new Map();
+    let flyPickupPool = new Map();
+
+    let roadGroup = null;
+    let environmentGroup = null;
+    let cameraFollowX = 0;
+    let laneDashesLeft = [];
+    let laneDashesRight = [];
+    let buildingSlots = [];
+    let lampSlots = [];
+
     function buildCar(model){
         model = model || CAR_MODELS.default;
 
@@ -8060,8 +8149,8 @@ preview();
 
         const bodyMaterial = new THREE.MeshStandardMaterial({
             color: model.defaultColor,
-            metalness: 0.7,
-            roughness: 0.2
+            metalness: 0.75,
+            roughness: 0.15
         });
 
         const lowerBodyMaterial = new THREE.MeshStandardMaterial({
@@ -8146,13 +8235,15 @@ preview();
         bodyShellFront.position.set(0, 0.14, -1.6);
         group.add(bodyShellFront);
 
-        // Front shoulder bulge: extra width directly over the front wheel
-        // so the front reads as flared shoulders rather than a flat taper.
+        // Front shoulder bulge: extra width AND height directly over the
+        // front wheel so the fender visually wraps the wheel from the
+        // closer/lower chase camera, not just from a top-down view — wide
+        // and tall enough to clear the wheel's own outer edge with margin.
         const frontShoulder = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.90, 0.14, 0.75),
+            new THREE.BoxGeometry(model.baseWidth * 1.22, 0.30, 0.85),
             bodyMaterial
         );
-        frontShoulder.position.set(0, 0.16, -1.5);
+        frontShoulder.position.set(0, 0.2, -1.5);
         group.add(frontShoulder);
 
         // Mid body / sill: bridges the front shell to the rear shell under
@@ -8191,13 +8282,15 @@ preview();
         bodyShellRear.position.set(0, 0.17, 1.3);
         group.add(bodyShellRear);
 
-        // Rear haunch bulge: extra width directly over the rear wheel for
-        // a wide, muscular rear-haunch stance.
+        // Rear haunch bulge: extra width AND height directly over the rear
+        // wheel — wide and tall enough to fully clear the wheel's outer
+        // edge/height from a close rear-3/4 chase camera, not just a wide
+        // stance seen from directly above.
         const rearHaunch = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 1.02, 0.22, 1.0),
+            new THREE.BoxGeometry(model.baseWidth * 1.34, 0.34, 1.05),
             bodyMaterial
         );
-        rearHaunch.position.set(0, 0.19, 1.4);
+        rearHaunch.position.set(0, 0.22, 1.4);
         group.add(rearHaunch);
 
         // Low front nose cap: a short, wide, shallow wedge closing the
@@ -8374,14 +8467,18 @@ preview();
             // exposed beside it. Positioned/sized independently per axle
             // since the front and rear body shells above have different
             // widths (frontShoulder vs. rearHaunch).
+            // Tall enough to visually wrap from near the ground up past
+            // the wheel's own vertical center (wheel top sits at y=0.8),
+            // not just a thin strip that leaves the wheel's upper half
+            // exposed when viewed from the closer rear-3/4 chase camera.
             const isFrontWheel = pos[1] < 0;
-            const fenderX = isFrontWheel ? model.baseWidth * 0.5 : model.baseWidth * 0.568;
-            const fenderW = isFrontWheel ? 0.32 : 0.30;
+            const fenderX = isFrontWheel ? model.baseWidth * 0.52 : model.baseWidth * 0.58;
+            const fenderW = isFrontWheel ? 0.46 : 0.44;
             const fender = new THREE.Mesh(
-                new THREE.BoxGeometry(fenderW, 0.12, 0.85),
+                new THREE.BoxGeometry(fenderW, 0.46, 0.9),
                 bodyMaterial
             );
-            fender.position.set(pos[0] * fenderX, 0.27, pos[1]);
+            fender.position.set(pos[0] * fenderX, 0.34, pos[1]);
             group.add(fender);
         });
 
@@ -8400,6 +8497,15 @@ preview();
             const taillight = new THREE.Mesh(taillightGeometry, taillightMaterial);
             taillight.position.set(side * (model.baseWidth * 0.36), 0.33, 2.25);
             group.add(taillight);
+        });
+
+        // Twin exhaust tips recessed into the rear bumper/diffuser area
+        const exhaustGeometry = new THREE.CylinderGeometry(0.045, 0.045, 0.1, 10);
+        [-1, 1].forEach(function(side){
+            const exhaust = new THREE.Mesh(exhaustGeometry, rimMaterial);
+            exhaust.rotation.x = Math.PI / 2;
+            exhaust.position.set(side * (model.baseWidth * 0.16), 0.05, 2.66);
+            group.add(exhaust);
         });
 
         // Fly-state glow fins: hidden underside emissive wings that only
@@ -8422,6 +8528,317 @@ preview();
         return { group: group, bodyMaterial: bodyMaterial, wheelSpinMeshes: wheelSpinMeshes, flyGlowMeshes: flyGlowMeshes, liftY: 0, lastCarZ: null, lastColor: null };
     }
 
+    // Named entry point requested for STEP A1: both P1 and P2 share the
+    // exact same enclosed-supercar geometry via buildCar(); this is a
+    // thin, explicitly-named wrapper around it so the player car and any
+    // future variant selection has one clear, reusable construction call.
+    function buildSupercar(color, variant){
+        const model = {
+            baseWidth: CAR3D_BASE_WIDTH,
+            wheelRadius: WHEEL_ROLL_RADIUS,
+            defaultColor: (typeof color !== "undefined" && color !== null) ? color : CAR_MODELS.default.defaultColor
+        };
+        return buildCar(model);
+    }
+
+    // Lightweight 3D traffic vehicle for the `enemies[]` gameplay array.
+    // Deliberately simpler than the player supercar (fewer primitives,
+    // shared wheel/glass/light geometries+materials) since several of
+    // these can exist on screen at once; still a real enclosed 3D body
+    // with wheels and headlights/taillights, not a 2D sprite.
+    function buildTrafficCar(colorHex){
+        const group = new THREE.Group();
+        const bodyMaterial = new THREE.MeshStandardMaterial({
+            color: colorHex || 0x2563eb,
+            metalness: 0.5,
+            roughness: 0.35
+        });
+
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.5, 3.6), bodyMaterial);
+        body.position.set(0, 0.35, 0);
+        group.add(body);
+
+        const hood = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.18, 1.2), bodyMaterial);
+        hood.position.set(0, 0.62, -1.3);
+        group.add(hood);
+
+        const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.42, 1.7), trafficGlassMaterial);
+        cabin.position.set(0, 0.7, -0.05);
+        group.add(cabin);
+
+        [
+            [-1, -1.25], [1, -1.25],
+            [-1, 1.25], [1, 1.25]
+        ].forEach(function(pos){
+            const wheel = new THREE.Mesh(trafficWheelGeometry, trafficWheelMaterial);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.position.set(pos[0] * 0.85, 0.34, pos[1]);
+            group.add(wheel);
+        });
+
+        [-1, 1].forEach(function(side){
+            const headlight = new THREE.Mesh(trafficLightGeometry, trafficHeadlightMaterial);
+            headlight.position.set(side * 0.6, 0.4, -1.78);
+            group.add(headlight);
+
+            const taillight = new THREE.Mesh(trafficLightGeometry, trafficTaillightMaterial);
+            taillight.position.set(side * 0.6, 0.4, 1.78);
+            group.add(taillight);
+        });
+
+        // Traffic drives toward the player (opposite direction from the
+        // player cars), so its local -Z "front"/headlights should point
+        // toward world -Z (back at the camera) — i.e. no extra rotation,
+        // matching the existing 2D drawEnemies() "faces the player" intent.
+
+        return { group: group, bodyMaterial: bodyMaterial };
+    }
+
+    function buildObstacleMesh(type){
+        const group = new THREE.Group();
+
+        if(type === "cone"){
+            const cone = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.9, 12), barrierMaterial);
+            cone.position.y = 0.45;
+            group.add(cone);
+
+            const base = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.08, 12), barrierStripeMaterial);
+            base.position.y = 0.04;
+            group.add(base);
+        }else{
+            const width = type === "barricade" ? 2.0 : 2.3;
+            const body = new THREE.Mesh(new THREE.BoxGeometry(width, 0.7, 0.35), barrierMaterial);
+            body.position.y = 0.42;
+            group.add(body);
+
+            for(let i = 0; i < 3; i++){
+                const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.72, 0.37), barrierStripeMaterial);
+                stripe.position.set(-width / 2 + 0.35 + i * ((width - 0.7) / 2), 0.42, 0);
+                group.add(stripe);
+            }
+
+            const legMat = barrierStripeMaterial;
+            [-1, 1].forEach(function(side){
+                const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.42, 0.5), legMat);
+                leg.position.set(side * (width / 2 - 0.15), 0.14, 0);
+                group.add(leg);
+            });
+        }
+
+        return { group: group };
+    }
+
+    function buildCoinMesh(){
+        const group = new THREE.Group();
+        const coin = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.09, 18), coinMaterial);
+        coin.position.y = 0.16;
+        group.add(coin);
+        return { group: group, spinTarget: coin };
+    }
+
+    function buildGlowPickupMesh(material){
+        const group = new THREE.Group();
+        const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.36, 0), material);
+        core.position.y = 0.55;
+        group.add(core);
+        return { group: group, spinTarget: core };
+    }
+
+    function buildFlyPickupMesh(duration){
+        const group = new THREE.Group();
+        const mat = duration === 10 ? flyPickupMaterial10 : flyPickupMaterial5;
+        const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.4, 0), mat);
+        core.position.y = 0.6;
+        group.add(core);
+        return { group: group, spinTarget: core };
+    }
+
+    // ================================================================
+    // 3D ROAD + ENVIRONMENT
+    // Built once at init. The road/shoulders/barriers are long static
+    // planes/boxes (no per-frame work). Lane-marking dashes, buildings
+    // and street lamps are small recycled pools repositioned each frame
+    // by layoutLaneDashes()/layoutEnvironment() using the existing
+    // `roadOffset` value the 2D game already advances every frame, so
+    // the world visibly scrolls in sync with race progress.
+    // ================================================================
+    function buildRoad(){
+        const group = new THREE.Group();
+        const roadLength = 220;
+        const roadCenterZ = roadLength / 2 - 15;
+
+        const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2f3a, roughness: 0.95, metalness: 0.05 });
+        const roadPlane = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_ROAD_HALF_WIDTH * 2 + 0.6, roadLength), roadMaterial);
+        roadPlane.rotation.x = -Math.PI / 2;
+        roadPlane.position.set(0, 0, roadCenterZ);
+        group.add(roadPlane);
+
+        const shoulderMaterial = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.9 });
+        [-1, 1].forEach(function(side){
+            const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(0.5, roadLength), shoulderMaterial);
+            shoulder.rotation.x = -Math.PI / 2;
+            shoulder.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.25), 0.001, roadCenterZ);
+            group.add(shoulder);
+        });
+
+        const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x1d6b3c, roughness: 1 });
+        [-1, 1].forEach(function(side){
+            const grass = new THREE.Mesh(new THREE.PlaneGeometry(10, roadLength), grassMaterial);
+            grass.rotation.x = -Math.PI / 2;
+            grass.position.set(side * (WORLD_ROAD_HALF_WIDTH + 5.6), -0.01, roadCenterZ);
+            group.add(grass);
+        });
+
+        const barrierRailMaterial = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, metalness: 0.2 });
+        [-1, 1].forEach(function(side){
+            const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.35, roadLength), barrierRailMaterial);
+            rail.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.5), 0.17, roadCenterZ);
+            group.add(rail);
+
+            const railStripeMaterial2 = barrierStripeMaterial;
+            for(let i = 0; i < 18; i++){
+                const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.36, 1.4), railStripeMaterial2);
+                stripe.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.5), 0.18, i * 12 - 15);
+                group.add(stripe);
+            }
+        });
+
+        const dashMaterial = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.6 });
+        const dashGeometry = new THREE.BoxGeometry(0.12, 0.02, LANE_DASH_LEN);
+        laneDashesLeft = [];
+        laneDashesRight = [];
+        for(let i = 0; i < LANE_DASH_COUNT; i++){
+            const dashL = new THREE.Mesh(dashGeometry, dashMaterial);
+            dashL.position.set(-WORLD_ROAD_HALF_WIDTH / 3, 0.02, 0);
+            group.add(dashL);
+            laneDashesLeft.push(dashL);
+
+            const dashR = new THREE.Mesh(dashGeometry, dashMaterial);
+            dashR.position.set(WORLD_ROAD_HALF_WIDTH / 3, 0.02, 0);
+            group.add(dashR);
+            laneDashesRight.push(dashR);
+        }
+
+        scene.add(group);
+        return group;
+    }
+
+    function layoutLaneDashes(scrollWorld){
+        let offset = scrollWorld % LANE_RANGE;
+        if(offset < 0) offset += LANE_RANGE;
+
+        for(let i = 0; i < LANE_DASH_COUNT; i++){
+            let z = (i * LANE_PERIOD - offset) % LANE_RANGE;
+            if(z < 0) z += LANE_RANGE;
+            laneDashesLeft[i].position.z = LANE_MIN_Z + z;
+            laneDashesRight[i].position.z = LANE_MIN_Z + z;
+        }
+    }
+
+    function buildEnvironment(){
+        const group = new THREE.Group();
+        const buildingColors = [0x0f1b2e, 0x13233b, 0x0c1624, 0x16283f];
+        const windowMaterial = new THREE.MeshStandardMaterial({
+            color: 0xfacc15,
+            emissive: 0xfacc15,
+            emissiveIntensity: 0.9,
+            roughness: 0.6
+        });
+        const lampPostMaterial = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.7 });
+        const lampGlowMaterial = new THREE.MeshStandardMaterial({
+            color: 0xfacc15,
+            emissive: 0xfacc15,
+            emissiveIntensity: 1.4,
+            roughness: 0.4
+        });
+
+        buildingSlots = [];
+        [-1, 1].forEach(function(side){
+            for(let i = 0; i < BUILDING_COUNT_PER_SIDE; i++){
+                const seed = i + (side > 0 ? 100 : 0);
+                const bw = 3 + (seed % 3) * 1.3;
+                const bh = 6 + (seed % 5) * 2.6;
+                const bd = 4;
+                const bx = side * (WORLD_ROAD_HALF_WIDTH + 7 + (seed % 3) * 1.5);
+
+                const building = new THREE.Mesh(
+                    new THREE.BoxGeometry(bw, bh, bd),
+                    new THREE.MeshStandardMaterial({
+                        color: buildingColors[seed % buildingColors.length],
+                        roughness: 0.85,
+                        metalness: 0.1
+                    })
+                );
+                building.position.set(bx, bh / 2, 0);
+                group.add(building);
+
+                // Windows are children of the building mesh (local-space
+                // positions relative to its own center) so they scroll
+                // together with it when layoutEnvironment() repositions
+                // the building each frame, instead of detaching from it.
+                for(let w = 0; w < 4; w++){
+                    if((seed + w) % 3 === 0) continue;
+                    const win = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.05), windowMaterial);
+                    win.position.set(
+                        (side > 0 ? -bw / 2 - 0.03 : bw / 2 + 0.03),
+                        (1.5 + w * (bh / 5)) - bh / 2,
+                        (w % 2 === 0 ? -1 : 1)
+                    );
+                    win.rotation.y = Math.PI / 2;
+                    building.add(win);
+                }
+
+                buildingSlots.push({ mesh: building, side: side, baseIndex: i });
+            }
+        });
+
+        lampSlots = [];
+        [-1, 1].forEach(function(side){
+            for(let i = 0; i < LAMP_COUNT_PER_SIDE; i++){
+                const lampGroup = new THREE.Group();
+
+                const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.2, 8), lampPostMaterial);
+                pole.position.y = 1.6;
+                lampGroup.add(pole);
+
+                const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.08), lampPostMaterial);
+                arm.position.set(-side * 0.35, 3.1, 0);
+                lampGroup.add(arm);
+
+                const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), lampGlowMaterial);
+                glow.position.set(-side * 0.68, 3.0, 0);
+                lampGroup.add(glow);
+
+                lampGroup.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.9), 0, 0);
+                group.add(lampGroup);
+                lampSlots.push({ group: lampGroup, side: side });
+            }
+        });
+
+        scene.add(group);
+        return group;
+    }
+
+    function layoutEnvironment(scrollWorld){
+        let bOffset = scrollWorld % BUILDING_RANGE;
+        if(bOffset < 0) bOffset += BUILDING_RANGE;
+
+        buildingSlots.forEach(function(slot){
+            let z = (slot.baseIndex * BUILDING_PERIOD - bOffset) % BUILDING_RANGE;
+            if(z < 0) z += BUILDING_RANGE;
+            slot.mesh.position.z = BUILDING_MIN_Z + z;
+        });
+
+        let lOffset = scrollWorld % LAMP_RANGE;
+        if(lOffset < 0) lOffset += LAMP_RANGE;
+
+        lampSlots.forEach(function(slot, idx){
+            let z = ((idx % LAMP_COUNT_PER_SIDE) * LAMP_PERIOD - lOffset) % LAMP_RANGE;
+            if(z < 0) z += LAMP_RANGE;
+            slot.group.position.z = LAMP_MIN_Z + z;
+        });
+    }
+
     function unprojectToGround(px, py){
         const ndcX = (px / 1000) * 2 - 1;
         const ndcY = -(py / 1000) * 2 + 1;
@@ -8442,6 +8859,13 @@ preview();
         return { x: worldX, z: worldZ };
     }
 
+    function disposePool(pool){
+        pool.forEach(function(entry){
+            if(entry && entry.group && scene) scene.remove(entry.group);
+        });
+        pool.clear();
+    }
+
     function disable3DCarLayer(){
         active = false;
 
@@ -8450,12 +8874,25 @@ preview();
             rafId = null;
         }
 
+        disposePool(trafficPool);
+        disposePool(obstaclePool);
+        disposePool(coinPool);
+        disposePool(speedBoostPool);
+        disposePool(lifeItemPool);
+        disposePool(flyPickupPool);
+
         try{
             if(renderer) renderer.dispose();
         }catch(e){}
 
         car1 = null;
         car2 = null;
+        roadGroup = null;
+        environmentGroup = null;
+        laneDashesLeft = [];
+        laneDashesRight = [];
+        buildingSlots = [];
+        lampSlots = [];
 
         const canvasEl = document.getElementById("carLayer3D");
         if(canvasEl) canvasEl.style.display = "none";
@@ -8498,15 +8935,21 @@ preview();
                 rafId = null;
             }
 
+            // STEP A1: the 3D canvas is now the authoritative visible race
+            // world (road/environment/traffic/cars), not a transparent
+            // overlay on top of the 2D canvas — alpha:false + an opaque
+            // clear color makes it fully occlude the 2D canvas beneath it
+            // (same stack position/size), without needing to touch the
+            // 2D canvas or any of its still-running gameplay/collision code.
             renderer = new THREE.WebGLRenderer({
                 canvas: canvasEl,
-                alpha: true,
+                alpha: false,
                 antialias: true
             });
 
             if(!renderer.getContext()) throw new Error("WebGL context unavailable");
 
-            renderer.setClearColor(0x000000, 0);
+            renderer.setClearColor(0x05070d, 1);
             renderer.setPixelRatio(1);
             renderer.setSize(1000, 1000, false);
 
@@ -8516,27 +8959,36 @@ preview();
             renderer.setViewport(0, 0, renderer.domElement.width, renderer.domElement.height);
 
             scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x05070d);
+            scene.fog = new THREE.Fog(0x05070d, 20, 95);
 
-            // Lowered/pulled-back vs. the previous near top-down framing so
-            // the car reads as a third-person rear 3/4 chase view instead of
-            // an overhead view. Still a single static full-field camera —
-            // unprojectToGround()/scale math below is camera-position
-            // agnostic, so this is a tuning change, not an architecture one.
-            camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
-            camera.position.set(0, 4.4, 9.2);
-            camera.lookAt(0, 0.5, -2.6);
+            // Third-person rear chase camera: elevated behind the player's
+            // own local frame (player sits at world Z=0 by definition; the
+            // world scrolls past it), looking down the track toward the
+            // horizon instead of the previous near top-down framing.
+            camera = new THREE.PerspectiveCamera(58, 1, 0.1, 140);
+            camera.position.set(0, 3.3, -6.4);
+            camera.lookAt(0, 1, 20);
             camera.updateMatrixWorld(true);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            scene.add(new THREE.HemisphereLight(0x9db4ff, 0x14100c, 0.55));
+            scene.add(new THREE.AmbientLight(0x8899bb, 0.35));
 
-            const dirLight = new THREE.DirectionalLight(0xffffff, 1.1);
-            dirLight.position.set(3, 8, 4);
-            scene.add(dirLight);
+            const moonLight = new THREE.DirectionalLight(0xcfe0ff, 0.9);
+            moonLight.position.set(-6, 14, 8);
+            scene.add(moonLight);
 
-            car1 = buildCar();
+            const fillLight = new THREE.PointLight(0xffb37a, 0.6, 30);
+            fillLight.position.set(0, 4, -4);
+            scene.add(fillLight);
+
+            roadGroup = buildRoad();
+            environmentGroup = buildEnvironment();
+
+            car1 = buildSupercar(selectedColor || CAR_MODELS.default.defaultColor);
             scene.add(car1.group);
 
-            car2 = buildCar();
+            car2 = buildSupercar(player2.color || 0x3b82f6);
             scene.add(car2.group);
 
             active = true;
@@ -8549,101 +9001,6 @@ preview();
             renderer.domElement.style.opacity = "1";
 
             renderer.render(scene, camera);
-
-            console.log("3D_CAR_FORCE_INIT_OK", {
-                renderer: !!renderer,
-                sceneChildren: scene ? scene.children.length : -1,
-                camera: !!camera,
-                canvas: canvasEl ? [canvasEl.width, canvasEl.height] : null
-            });
-
-            try {
-                const scanGl = renderer.getContext();
-                const scanW = renderer.domElement.width;
-                const scanH = renderer.domElement.height;
-                const pixels = new Uint8Array(scanW * scanH * 4);
-                scanGl.readPixels(0, 0, scanW, scanH, scanGl.RGBA, scanGl.UNSIGNED_BYTE, pixels);
-                const readPixelsGlError = scanGl.getError();
-
-                let maxAlpha = 0;
-                let nonZeroAlphaPixelCount = 0;
-                let nonBlackPixelCount = 0;
-                let alphaMinX = scanW, alphaMinY = scanH, alphaMaxX = -1, alphaMaxY = -1;
-                let blackMinX = scanW, blackMinY = scanH, blackMaxX = -1, blackMaxY = -1;
-                const nonBlackSample = [];
-
-                for(let y = 0; y < scanH; y++){
-                    for(let x = 0; x < scanW; x++){
-                        const i = (y * scanW + x) * 4;
-                        const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2], a = pixels[i + 3];
-
-                        if(a > 0){
-                            nonZeroAlphaPixelCount++;
-                            if(a > maxAlpha) maxAlpha = a;
-                            if(x < alphaMinX) alphaMinX = x;
-                            if(x > alphaMaxX) alphaMaxX = x;
-                            if(y < alphaMinY) alphaMinY = y;
-                            if(y > alphaMaxY) alphaMaxY = y;
-                        }
-
-                        if(r > 0 || g > 0 || b > 0){
-                            nonBlackPixelCount++;
-                            if(x < blackMinX) blackMinX = x;
-                            if(x > blackMaxX) blackMaxX = x;
-                            if(y < blackMinY) blackMinY = y;
-                            if(y > blackMaxY) blackMaxY = y;
-                            if(nonBlackSample.length < 10) nonBlackSample.push({ x, y, r, g, b, a });
-                        }
-                    }
-                }
-
-                const camWorldPos = new THREE.Vector3();
-                camWorldPos.setFromMatrixPosition(camera.matrixWorld);
-
-                console.log("3D_CAR_FRAMEBUFFER_PIXEL_SCAN", {
-                    totalPixels: scanW * scanH,
-                    maxAlpha: maxAlpha,
-                    nonZeroAlphaPixelCount: nonZeroAlphaPixelCount,
-                    nonBlackPixelCount: nonBlackPixelCount,
-                    nonTransparentBBox: nonZeroAlphaPixelCount > 0
-                        ? { minX: alphaMinX, maxX: alphaMaxX, minY: alphaMinY, maxY: alphaMaxY }
-                        : null,
-                    nonBlackBBox: nonBlackPixelCount > 0
-                        ? { minX: blackMinX, maxX: blackMaxX, minY: blackMinY, maxY: blackMaxY }
-                        : null,
-                    nonBlackSample: nonBlackSample,
-                    readPixelsGlError: readPixelsGlError,
-                    camera: {
-                        position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
-                        near: camera.near,
-                        far: camera.far,
-                        fov: camera.fov,
-                        aspect: camera.aspect,
-                        matrixWorldPosition: { x: camWorldPos.x, y: camWorldPos.y, z: camWorldPos.z }
-                    },
-                    car1: {
-                        position: { x: car1.group.position.x, y: car1.group.position.y, z: car1.group.position.z },
-                        rotation: { x: car1.group.rotation.x, y: car1.group.rotation.y, z: car1.group.rotation.z },
-                        scale: { x: car1.group.scale.x, y: car1.group.scale.y, z: car1.group.scale.z },
-                        visible: car1.group.visible,
-                        childCount: car1.group.children.length
-                    },
-                    sceneChildCount: scene.children.length
-                });
-            } catch(scanErr) {
-                console.warn("3D_CAR_FRAMEBUFFER_PIXEL_SCAN diagnostic failed:", scanErr);
-            }
-
-            console.log("3D_CAR_POST_INIT_RENDER_CHECK", {
-                domElementWidth: renderer.domElement.width,
-                domElementHeight: renderer.domElement.height,
-                domElementClientWidth: renderer.domElement.clientWidth,
-                domElementClientHeight: renderer.domElement.clientHeight,
-                glError: renderer.getContext().getError(),
-                sceneChildCount: scene.children.length,
-                carGroupVisible: car1.group.visible,
-                carGroupChildCount: car1.group.children.length
-            });
 
             // Lifecycle fix: arm the per-frame sync/render loop here so
             // ANY successful init3DCarLayer() call resumes it - not just
@@ -8695,42 +9052,34 @@ preview();
             car.flyGlowMeshes.forEach(function(m){ m.visible = showGlow; });
         }
 
-        const cx = playerRef.x + playerRef.width / 2;
-        const cy = playerRef.y + playerRef.height / 2;
+        // STEP A1: position via the direct/independent 2D->3D world
+        // mapping (mapWorldX/mapWorldZ) instead of reverse-projecting a
+        // 2D screen pixel through the camera. The car's modeled width
+        // already matches CAR3D_BASE_WIDTH, and player.width/height are
+        // constant during gameplay, so a fixed scale is correct — no
+        // per-frame scale recomputation needed.
+        const worldX = mapWorldX(playerRef.x + playerRef.width / 2);
+        const worldZ = mapWorldZ(playerRef.y + playerRef.height / 2);
 
-        const centerGround = unprojectToGround(cx, cy);
+        // The player drives away from this rear chase camera (world +Z is
+        // "ahead"/toward the horizon), but the modeled car's own "front"
+        // (headlights) sits at local -Z. Rotating 180 degrees points that
+        // local -Z toward world +Z, so the camera correctly sees the car's
+        // rear (taillights/spoiler) — not its headlights facing back at us.
+        car.group.position.set(worldX, car.liftY, worldZ);
+        car.group.scale.setScalar(1);
+        car.group.rotation.y = Math.PI;
 
-        if(centerGround){
-
-            const edgeGround = unprojectToGround(playerRef.x + playerRef.width, cy);
-            let scale = car.group.scale.x || 1;
-
-            if(edgeGround){
-                const worldWidth = Math.hypot(
-                    edgeGround.x - centerGround.x,
-                    edgeGround.z - centerGround.z
-                ) * 2;
-
-                if(Number.isFinite(worldWidth) && worldWidth > 0.05){
-                    scale = worldWidth / CAR3D_BASE_WIDTH;
-                    scale = Math.max(0.3, Math.min(3, scale));
-                }
+        if(car.lastCarZ !== null){
+            const rollDelta = worldZ - car.lastCarZ;
+            if(rollDelta !== 0){
+                const spinAngle = -rollDelta / WHEEL_ROLL_RADIUS;
+                car.wheelSpinMeshes.forEach(function(m){
+                    m.rotateOnAxis(WHEEL_ROLL_AXIS, spinAngle);
+                });
             }
-
-            car.group.position.set(centerGround.x, car.liftY, centerGround.z);
-            car.group.scale.setScalar(scale);
-
-            if(car.lastCarZ !== null){
-                const rollDelta = centerGround.z - car.lastCarZ;
-                if(rollDelta !== 0){
-                    const spinAngle = rollDelta / WHEEL_ROLL_RADIUS;
-                    car.wheelSpinMeshes.forEach(function(m){
-                        m.rotateOnAxis(WHEEL_ROLL_AXIS, spinAngle);
-                    });
-                }
-            }
-            car.lastCarZ = centerGround.z;
         }
+        car.lastCarZ = worldZ;
 
         const currentColor = (playerRef && playerRef.color) ||
             (typeof colorFallback !== "undefined" && colorFallback);
@@ -8741,12 +9090,103 @@ preview();
         }
     }
 
+    // Generic pool sync: keeps one pooled 3D mesh bundle per live 2D
+    // gameplay object (used directly as the Map key). Creates a mesh the
+    // first time an object is seen, repositions it every frame from the
+    // object's own 2D x/y via the shared world mapping, and disposes any
+    // pooled mesh whose backing 2D object is no longer in the array
+    // (i.e. it scrolled off / was collected in the untouched 2D sim).
+    function syncSimplePool(items, pool, builderFn, getWorldPos, extraFn){
+        const seen = new Set();
+
+        items.forEach(function(item){
+            seen.add(item);
+
+            let entry = pool.get(item);
+            if(!entry){
+                entry = builderFn(item);
+                scene.add(entry.group);
+                pool.set(item, entry);
+            }
+
+            const pos = getWorldPos(item);
+            entry.group.position.set(pos.x, pos.y || 0, pos.z);
+
+            if(extraFn) extraFn(entry, item);
+        });
+
+        pool.forEach(function(entry, key){
+            if(!seen.has(key)){
+                scene.remove(entry.group);
+                pool.delete(key);
+            }
+        });
+    }
+
     function update3DCarLayer(){
         if(!active) return;
 
         try{
             syncCarToPlayer(player, car1, selectedColor);
             syncCarToPlayer(player2, car2, player2.color);
+
+            const scrollWorld = roadOffset * WORLD_SCROLL_SCALE;
+            layoutLaneDashes(scrollWorld);
+            layoutEnvironment(scrollWorld);
+
+            syncSimplePool(enemies, trafficPool, function(e){
+                return buildTrafficCar(e.color);
+            }, function(e){
+                return worldPosForBox(e);
+            });
+
+            syncSimplePool(obstacles, obstaclePool, function(o){
+                return buildObstacleMesh(o.type);
+            }, function(o){
+                return worldPosForBox(o);
+            });
+
+            syncSimplePool(coins, coinPool, function(){
+                return buildCoinMesh();
+            }, function(c){
+                return worldPosForPoint(c);
+            }, function(entry){
+                entry.spinTarget.rotation.y += 0.09;
+            });
+
+            syncSimplePool(speedBoosts, speedBoostPool, function(){
+                return buildGlowPickupMesh(speedBoostPickupMaterial);
+            }, function(sb){
+                return worldPosForBox(sb);
+            }, function(entry){
+                entry.spinTarget.rotation.y += 0.06;
+                entry.spinTarget.rotation.x += 0.03;
+            });
+
+            syncSimplePool(lifeItems, lifeItemPool, function(){
+                return buildGlowPickupMesh(lifePickupMaterial);
+            }, function(li){
+                return worldPosForBox(li);
+            }, function(entry){
+                entry.spinTarget.rotation.y += 0.06;
+            });
+
+            syncSimplePool(flyPowerUps, flyPickupPool, function(fp){
+                return buildFlyPickupMesh(fp.duration);
+            }, function(fp){
+                return worldPosForBox(fp);
+            }, function(entry){
+                entry.spinTarget.rotation.y += 0.07;
+                entry.spinTarget.rotation.x += 0.05;
+            });
+
+            // Smooth third-person camera follow: track the player's own
+            // lateral position (damped) instead of a fixed/static rig, and
+            // keep looking toward the horizon ahead of that same point.
+            const targetX = mapWorldX(player.x + player.width / 2) * 0.6;
+            cameraFollowX += (targetX - cameraFollowX) * 0.06;
+            camera.position.x = cameraFollowX;
+            camera.lookAt(cameraFollowX, 1, 20);
 
             renderer.render(scene, camera);
 
