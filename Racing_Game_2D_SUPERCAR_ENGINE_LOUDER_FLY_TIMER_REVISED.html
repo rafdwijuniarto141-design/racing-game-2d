@@ -1324,6 +1324,29 @@ Tidak aktif
 </div>
 
 
+<!-- FLY -->
+
+<div class="info-card">
+
+<strong>
+    🪽 FLY
+</strong>
+
+<p
+style="
+margin-top:8px;
+color:#9bb1c8;
+font-size:13px">
+
+<span id="flyStatusText">
+READY
+</span>
+
+</p>
+
+</div>
+
+
 <!-- FEATURES -->
 
 <div class="info-card">
@@ -1600,6 +1623,11 @@ document.getElementById(
 const speedBoostText =
 document.getElementById(
     "speedBoostText"
+);
+
+const flyStatusText =
+document.getElementById(
+    "flyStatusText"
 );
 
 const resultText =
@@ -3677,21 +3705,21 @@ function drawFlyPowerUps(){
     });
 }
 
-function drawFlyingEffects(){
+function drawFlyingEffects(target, typeValue){
     const lift = 92;
-    const cx = player.x + player.width/2;
-    const groundY = player.y + player.height + 5;
+    const cx = target.x + target.width/2;
+    const groundY = target.y + target.height + 5;
     ctx.save();
     ctx.fillStyle='rgba(0,0,0,.32)';
-    ctx.beginPath(); ctx.ellipse(cx,groundY,player.width*.42,10,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx,groundY,target.width*.42,10,0,0,Math.PI*2); ctx.fill();
     ctx.globalAlpha=.45 + Math.sin(performance.now()/90)*.12;
-    ctx.strokeStyle=flyType===10?'#22d3ee':'#c4b5fd'; ctx.lineWidth=5;
-    ctx.beginPath(); ctx.ellipse(cx,player.y-lift/2+player.height/2,player.width*.62,player.height*.55,0,0,Math.PI*2); ctx.stroke();
-    ctx.globalAlpha=.8; ctx.fillStyle=flyType===10?'#67e8f9':'#ddd6fe';
+    ctx.strokeStyle=typeValue===10?'#22d3ee':'#c4b5fd'; ctx.lineWidth=5;
+    ctx.beginPath(); ctx.ellipse(cx,target.y-lift/2+target.height/2,target.width*.62,target.height*.55,0,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha=.8; ctx.fillStyle=typeValue===10?'#67e8f9':'#ddd6fe';
     for(let i=0;i<5;i++){
-        const y=player.y+player.height+8+i*8, r=Math.max(2,7-i);
-        ctx.beginPath();ctx.arc(player.x+player.width*.35,y,r,0,Math.PI*2);ctx.fill();
-        ctx.beginPath();ctx.arc(player.x+player.width*.65,y,r,0,Math.PI*2);ctx.fill();
+        const y=target.y+target.height+8+i*8, r=Math.max(2,7-i);
+        ctx.beginPath();ctx.arc(target.x+target.width*.35,y,r,0,Math.PI*2);ctx.fill();
+        ctx.beginPath();ctx.arc(target.x+target.width*.65,y,r,0,Math.PI*2);ctx.fill();
     }
     ctx.restore();
 }
@@ -4886,6 +4914,8 @@ function draw(){
 
     drawGrass();
 
+    drawCityBackdrop();
+
     drawRoad();
 
     drawCoins();
@@ -4900,6 +4930,10 @@ function draw(){
     drawEnemies();
 
     drawPlayer();
+
+    if(player2.flyActive){
+        drawFlyingEffects(player2, player2.flyType);
+    }
 
     drawParticles();
 
@@ -5095,6 +5129,104 @@ function drawRoad(){
         }
 
     }
+
+    drawRoadBarriers();
+
+}
+
+
+/* =========================================================
+   ROAD BARRIERS
+========================================================= */
+
+function drawRoadBarriers(){
+
+    const stripe = 34;
+    const scroll = roadOffset % (stripe * 2);
+
+    [
+        { x: 100, w: 20 },
+        { x: 880, w: 20 }
+    ].forEach(function(side){
+
+        for(let y = -stripe * 2 + scroll; y < H; y += stripe * 2){
+
+            ctx.fillStyle = "#dc2626";
+            ctx.fillRect(side.x, y, side.w, stripe);
+
+            ctx.fillStyle = "#f8fafc";
+            ctx.fillRect(side.x, y + stripe, side.w, stripe);
+
+        }
+
+        ctx.fillStyle = "rgba(0,0,0,.35)";
+        ctx.fillRect(side.x, 0, side.w, 4);
+
+    });
+
+}
+
+
+/* =========================================================
+   CITY BACKDROP
+========================================================= */
+
+function drawCityBackdrop(){
+
+    const spacing = 260;
+    const scroll = (roadOffset * 0.5) % spacing;
+    const colors = ["#0f1b2e", "#13233b", "#0c1624", "#16283f"];
+
+    [
+        { xMin: 0, xMax: 96, align: "right" },
+        { xMin: 904, xMax: 1000, align: "left" }
+    ].forEach(function(side, sideIdx){
+
+        for(let i = -1; i < 5; i++){
+
+            const y = i * spacing - scroll + spacing;
+            const seed = Math.abs(Math.floor((y + 4000) / spacing)) + sideIdx * 7;
+            const bw = 30 + (seed % 3) * 12;
+            const bh = 110 + (seed % 5) * 32;
+            const bx = side.align === "right" ? side.xMax - bw - 6 : side.xMin + 6;
+
+            ctx.fillStyle = colors[seed % colors.length];
+            ctx.fillRect(bx, y - bh, bw, bh);
+
+            ctx.fillStyle = "rgba(250,204,21,.5)";
+            for(let wy = y - bh + 10; wy < y - 10; wy += 16){
+                for(let wx = bx + 6; wx < bx + bw - 6; wx += 12){
+                    if(((Math.floor(wx) + Math.floor(wy) + seed) % 5) === 0){
+                        ctx.fillRect(wx, wy, 4, 6);
+                    }
+                }
+            }
+
+        }
+
+    });
+
+    const lampSpacing = 240;
+    const lampScroll = roadOffset % lampSpacing;
+
+    [107, 893].forEach(function(lx){
+
+        for(let ly = -lampScroll; ly < H + lampSpacing; ly += lampSpacing){
+
+            ctx.fillStyle = "#1e293b";
+            ctx.fillRect(lx - 2, ly, 4, 42);
+
+            ctx.beginPath();
+            ctx.fillStyle = "rgba(250,204,21,.85)";
+            ctx.shadowColor = "rgba(250,204,21,.6)";
+            ctx.shadowBlur = 12;
+            ctx.arc(lx, ly, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+        }
+
+    });
 
 }
 
@@ -5845,7 +5977,7 @@ function drawPlayer(){
 
 
     if(flyActive){
-        drawFlyingEffects();
+        drawFlyingEffects(player, flyType);
     }
 
     drawMcLaren(
@@ -7167,6 +7299,23 @@ function updateHUD(){
 
     }
 
+
+    if(flyStatusText){
+
+        if(flyActive){
+
+            flyStatusText.textContent =
+            "🪽 " + flyTimeLeft.toFixed(1) + "s";
+
+        }else{
+
+            flyStatusText.textContent =
+            "READY";
+
+        }
+
+    }
+
 }
 
 
@@ -7876,6 +8025,8 @@ preview();
     const CAR3D_BASE_WIDTH = 1.9;
     const WHEEL_ROLL_AXIS = new THREE.Vector3(0, 1, 0);
     const WHEEL_ROLL_RADIUS = 0.4;
+    const FLY_LIFT_HEIGHT = 1.3;
+    const FLY_LIFT_EASE = 0.08;
 
     // Slice 3B: minimal data-only model definition describing exactly the
     // existing car geometry/appearance (not a second rendering system).
@@ -8015,19 +8166,33 @@ preview();
         rearBody.position.set(0, 0.19, 1.2);
         group.add(rearBody);
 
-        // Long, low, pointed nose wedge: a 4-sided cylinder frustum tapering
-        // narrow-and-low toward the front tip (tapers downward and inward)
+        // Wide, low front nose wedge: a 4-sided cylinder frustum, shortened
+        // and widened at the tip (vs. the previous generation) so the front
+        // reads as a wide supercar fascia rather than a narrow open-wheel
+        // point — the true full-width coverage at the wheel line comes from
+        // the frontFascia bridge box added below.
         const nose = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.11, 0.4, 1.85, 4, 1, false, Math.PI / 4),
+            new THREE.CylinderGeometry(0.32, 0.48, 1.5, 4, 1, false, Math.PI / 4),
             bodyMaterial
         );
         nose.rotation.x = -Math.PI / 2;
-        nose.position.set(0, 0.15, -1.75);
+        nose.position.set(0, 0.15, -1.85);
         group.add(nose);
+
+        // Front fascia bridge: a full-width low body section spanning the
+        // front wheel line so the wheels sit visually inside continuous
+        // bodywork instead of poking out past a narrow nose (the open-wheel
+        // look this shape previously had).
+        const frontFascia = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.14, 0.4),
+            bodyMaterial
+        );
+        frontFascia.position.set(0, 0.12, -1.35);
+        group.add(frontFascia);
 
         // Front splitter lip: thin flat blade protruding beyond the bumper
         const splitterLip = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.74, 0.03, 0.12),
+            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.03, 0.12),
             lowerBodyMaterial
         );
         splitterLip.position.set(0, 0.04, -2.8);
@@ -8035,7 +8200,7 @@ preview();
 
         // Aggressive low front bumper/splitter body
         const bumper = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.68, 0.06, 0.16),
+            new THREE.BoxGeometry(model.baseWidth * 0.76, 0.06, 0.16),
             lowerBodyMaterial
         );
         bumper.position.set(0, 0.06, -2.62);
@@ -8176,9 +8341,12 @@ preview();
 
             // Fender flare: blends the wheel arch into the body volume so
             // the wheel reads as integrated rather than bolted to a box.
-            // Widened slightly to match the wider (0.30) wheel geometry.
+            // Front fenders are widened further to meet the frontFascia
+            // bridge above and fully enclose the front wheels; rear
+            // fenders stay closer to the original width.
+            const isFrontWheel = pos[1] < 0;
             const fender = new THREE.Mesh(
-                new THREE.BoxGeometry(0.22, 0.1, 0.55),
+                new THREE.BoxGeometry(isFrontWheel ? 0.36 : 0.26, 0.1, 0.6),
                 bodyMaterial
             );
             fender.position.set(pos[0] * (trackHalf - 0.05), 0.28, pos[1]);
@@ -8202,7 +8370,24 @@ preview();
             group.add(taillight);
         });
 
-        return { group: group, bodyMaterial: bodyMaterial, wheelSpinMeshes: wheelSpinMeshes, lastCarZ: null, lastColor: null };
+        // Fly-state glow fins: hidden underside emissive wings that only
+        // become visible while this car's Fly power-up is active (reuses
+        // the existing headlight material, so no new THREE.Material is
+        // created just for this effect).
+        const flyGlowMeshes = [];
+        [-1, 1].forEach(function(side){
+            const wing = new THREE.Mesh(
+                new THREE.BoxGeometry(0.5, 0.03, 0.75),
+                headlightMaterial
+            );
+            wing.position.set(side * (model.baseWidth * 0.58), -0.08, 0.25);
+            wing.rotation.z = side * 0.32;
+            wing.visible = false;
+            group.add(wing);
+            flyGlowMeshes.push(wing);
+        });
+
+        return { group: group, bodyMaterial: bodyMaterial, wheelSpinMeshes: wheelSpinMeshes, flyGlowMeshes: flyGlowMeshes, liftY: 0, lastCarZ: null, lastColor: null };
     }
 
     function unprojectToGround(px, py){
@@ -8300,9 +8485,14 @@ preview();
 
             scene = new THREE.Scene();
 
+            // Lowered/pulled-back vs. the previous near top-down framing so
+            // the car reads as a third-person rear 3/4 chase view instead of
+            // an overhead view. Still a single static full-field camera —
+            // unprojectToGround()/scale math below is camera-position
+            // agnostic, so this is a tuning change, not an architecture one.
             camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
-            camera.position.set(0, 7, 10);
-            camera.lookAt(0, 0, -1.5);
+            camera.position.set(0, 4.4, 9.2);
+            camera.lookAt(0, 0.5, -2.6);
             camera.updateMatrixWorld(true);
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.7));
@@ -8459,6 +8649,20 @@ preview();
             Math.floor(invincibleValue * 12) % 2 === 0
         );
 
+        // Fly: lift the actual 3D car off the ground plane while this
+        // player's Fly power-up is active, easing toward the target height
+        // each frame so takeoff/landing read as smooth motion rather than a
+        // snap. FLY_LIFT_HEIGHT/FLY_LIFT_EASE are shared module constants.
+        const flyingNow = (playerRef === player) ? flyActive : !!playerRef.flyActive;
+        const targetLift = flyingNow ? FLY_LIFT_HEIGHT : 0;
+        car.liftY += (targetLift - car.liftY) * FLY_LIFT_EASE;
+        if(Math.abs(car.liftY) < 0.001) car.liftY = 0;
+
+        if(car.flyGlowMeshes){
+            const showGlow = car.liftY > 0.05;
+            car.flyGlowMeshes.forEach(function(m){ m.visible = showGlow; });
+        }
+
         const cx = playerRef.x + playerRef.width / 2;
         const cy = playerRef.y + playerRef.height / 2;
 
@@ -8481,7 +8685,7 @@ preview();
                 }
             }
 
-            car.group.position.set(centerGround.x, 0, centerGround.z);
+            car.group.position.set(centerGround.x, car.liftY, centerGround.z);
             car.group.scale.setScalar(scale);
 
             if(car.lastCarZ !== null){
