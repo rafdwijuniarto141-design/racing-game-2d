@@ -8352,6 +8352,69 @@ preview();
         return promise;
     }
 
+    // ================================================================
+    // STEP A6 — real GLB environment prop: street lamp.
+    // "Lantern" from the official Khronos glTF-Sample-Models repo
+    // (2.0/Lantern), CC0/public domain, credited to Microsoft. Verified
+    // mesh names: LanternPole_Body / LanternPole_Chain / LanternPole_Lantern.
+    // Measured bounding box (own units): 15.49 x 25.66 x 4.63, base near
+    // local y=0.18, with most of the X-extent on one side of the pole
+    // (the arm+hanging lantern head) — scaled to match the previous
+    // primitive lamp's ~3.2-unit pole height, and yawed per side so that
+    // asymmetric arm swings toward the road, matching the old primitive
+    // lamp's arm-toward-road convention.
+    // ================================================================
+    const STREET_LAMP_MODEL_URL = "assets/models/lantern.glb";
+    const STREET_LAMP_SCALE = 0.125;
+    const STREET_LAMP_Y_OFFSET = -0.184 * STREET_LAMP_SCALE;
+
+    function attachStreetLampModel(lampGroup, side, fallbackPostMaterial, fallbackGlowMaterial){
+        loadCarGltfTemplate(STREET_LAMP_MODEL_URL).then(function(template){
+            const modelRoot = template.clone(true);
+            modelRoot.traverse(function(node){
+                if(!node.isMesh) return;
+                if(Array.isArray(node.material)){
+                    node.material = node.material.map(function(m){ return m.clone(); });
+                }else if(node.material){
+                    node.material = node.material.clone();
+                }
+                const name = (node.name || "").toLowerCase();
+                const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+                if(!mat) return;
+                if(name.indexOf("lantern") !== -1){
+                    // The glass/light-housing part of the fixture — give it
+                    // a warm emissive glow so it reads as a lit streetlamp
+                    // instead of a dark metal shape at night.
+                    mat.emissive = mat.emissive || new THREE.Color();
+                    mat.emissive.set(0xffd88a);
+                    mat.emissiveIntensity = 1.2;
+                    mat.roughness = 0.4;
+                }else{
+                    mat.metalness = 0.7;
+                    mat.roughness = 0.55;
+                }
+            });
+            modelRoot.rotation.y = side > 0 ? Math.PI : 0;
+            modelRoot.scale.setScalar(STREET_LAMP_SCALE);
+            modelRoot.position.y = STREET_LAMP_Y_OFFSET;
+            lampGroup.add(modelRoot);
+        }).catch(function(){
+            // Fallback: the original primitive pole/arm/glow, so a lamp
+            // slot never renders empty if the GLB cannot be loaded.
+            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.2, 8), fallbackPostMaterial);
+            pole.position.y = 1.6;
+            lampGroup.add(pole);
+
+            const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.08), fallbackPostMaterial);
+            arm.position.set(-side * 0.35, 3.1, 0);
+            lampGroup.add(arm);
+
+            const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), fallbackGlowMaterial);
+            glow.position.set(-side * 0.68, 3.0, 0);
+            lampGroup.add(glow);
+        });
+    }
+
     // Clones the cached GLB template into `group`, gives the clone its
     // own materials (so per-instance paint-color tinting doesn't affect
     // every other car sharing the same loaded template), and detects
@@ -9441,6 +9504,7 @@ preview();
         const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 1.6 });
         const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x3b2a1a, roughness: 0.9 });
         const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x1f6b3a, roughness: 0.85 });
+        const foliageMaterialAlt = new THREE.MeshStandardMaterial({ color: 0x2c7a3f, roughness: 0.85 });
         const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.85 });
 
         [-1, 1].forEach(function(side){
@@ -9477,6 +9541,46 @@ preview();
                 building.position.set(bx, bh / 2, 0);
                 building.receiveShadow = true;
                 group.add(building);
+
+                // STEP A6 — real architectural massing instead of a single
+                // extruded box: a wider street-level podium (a real
+                // building typically flares out at its base), vertical
+                // facade pilasters (proud trim strips, not just flat
+                // window-punched walls), and balconies on the sidewalk-
+                // facing side of about half the towers.
+                const podiumMaterial = new THREE.MeshStandardMaterial({
+                    color: 0x0a0e16, roughness: 0.7, metalness: 0.25
+                });
+                const podiumH = Math.min(3.4, bh * 0.22);
+                const podium = new THREE.Mesh(new THREE.BoxGeometry(bw + 0.7, podiumH, bd + 0.7), podiumMaterial);
+                podium.position.set(0, -bh / 2 + podiumH / 2, 0);
+                building.add(podium);
+
+                const pilasterMaterial = new THREE.MeshStandardMaterial({
+                    color: buildingColors[(seed + 1) % buildingColors.length],
+                    roughness: 0.6, metalness: 0.2
+                });
+                const pilasterCount = 3 + (seed % 3);
+                for(let p = 0; p < pilasterCount; p++){
+                    const pz = -bd / 2 + (p + 0.5) * (bd / pilasterCount);
+                    const pilaster = new THREE.Mesh(new THREE.BoxGeometry(bw + 0.06, bh - podiumH, 0.18), pilasterMaterial);
+                    pilaster.position.set(0, podiumH / 2, pz);
+                    building.add(pilaster);
+                }
+
+                if(seed % 2 === 1){
+                    const balconyMaterial = new THREE.MeshStandardMaterial({ color: 0x232936, roughness: 0.75 });
+                    const balconyFloors = Math.max(2, Math.floor((bh - podiumH) / 4.4));
+                    for(let bf = 0; bf < balconyFloors; bf++){
+                        const balcony = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.85, 0.12, 0.5), balconyMaterial);
+                        balcony.position.set(
+                            0,
+                            (podiumH + 1.6 + bf * 4.4) - bh / 2,
+                            (side > 0 ? bd / 2 + 0.25 : -bd / 2 - 0.25)
+                        );
+                        building.add(balcony);
+                    }
+                }
 
                 // Windows are children of the building mesh (local-space
                 // positions relative to its own center) so they scroll
@@ -9537,13 +9641,27 @@ preview();
                 // One sidewalk tree per building slot, planted between the
                 // road shoulder and the facade — scrolls with the building
                 // it's parented to instead of needing its own pool.
+                // STEP A6 — a real tree canopy reads as three overlapping
+                // rounded foliage clusters at slightly different offsets/
+                // sizes (a natural, irregular silhouette) instead of one
+                // perfect cone, with two slightly-different green shades
+                // for variety between trees.
                 const tree = new THREE.Group();
-                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 1.1, 6), trunkMaterial);
-                trunk.position.y = 0.55;
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 1.3, 6), trunkMaterial);
+                trunk.position.y = 0.65;
                 tree.add(trunk);
-                const foliage = new THREE.Mesh(new THREE.ConeGeometry(0.65, 1.6, 8), foliageMaterial);
-                foliage.position.y = 1.5;
-                tree.add(foliage);
+                const canopyMat = (seed % 2 === 0) ? foliageMaterial : foliageMaterialAlt;
+                const canopyClusters = [
+                    { r: 0.62, x: 0, y: 1.75, z: 0 },
+                    { r: 0.42, x: 0.32, y: 1.5, z: 0.15 },
+                    { r: 0.4, x: -0.28, y: 1.58, z: -0.2 }
+                ];
+                canopyClusters.forEach(function(c){
+                    const lump = new THREE.Mesh(new THREE.SphereGeometry(c.r, 7, 6), canopyMat);
+                    lump.position.set(c.x, c.y, c.z);
+                    lump.scale.y = 1.15;
+                    tree.add(lump);
+                });
                 tree.position.set(
                     -side * (bw / 2 + 1.9),
                     -bh / 2,
@@ -9607,18 +9725,7 @@ preview();
         [-1, 1].forEach(function(side){
             for(let i = 0; i < LAMP_COUNT_PER_SIDE; i++){
                 const lampGroup = new THREE.Group();
-
-                const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.2, 8), lampPostMaterial);
-                pole.position.y = 1.6;
-                lampGroup.add(pole);
-
-                const arm = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.08, 0.08), lampPostMaterial);
-                arm.position.set(-side * 0.35, 3.1, 0);
-                lampGroup.add(arm);
-
-                const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), lampGlowMaterial);
-                glow.position.set(-side * 0.68, 3.0, 0);
-                lampGroup.add(glow);
+                attachStreetLampModel(lampGroup, side, lampPostMaterial, lampGlowMaterial);
 
                 // Only the first recycled lamp slot per side carries a real
                 // PointLight (childed to the group, so it scrolls with it
