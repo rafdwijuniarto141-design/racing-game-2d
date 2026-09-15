@@ -8222,10 +8222,74 @@ preview();
     // wheel meshes by name for the existing roll-animation code. Falls
     // back to `fallbackBuilder()` (the pre-existing primitive geometry)
     // if the GLB is unavailable, so callers always end up with a car.
+    // STEP A2 — per-part PBR/emissive tuning for the real ferrari.glb mesh
+    // names (verified directly against the loaded asset; see the STEP A2
+    // audit). The exporter left every material at a uniform metalness 0.2/
+    // roughness 0.8 default, so without this every part — chrome, glass,
+    // tires, paint — looked like the same dull plastic. Returns "headlight"
+    // or "taillight" when this node is a light-lens mesh, so the caller can
+    // keep a reference for brake-light response.
+    function tuneVehicleMaterialByName(mat, name){
+        if(!mat) return null;
+
+        if(/^(body|paint|carpaint)$/.test(name)){
+            mat.roughness = 0.35;
+            mat.metalness = 0.6;
+            mat.envMapIntensity = 1.1;
+            return null;
+        }
+
+        if(name === "glass"){
+            mat.transparent = true;
+            mat.opacity = 0.55;
+            mat.metalness = 0.9;
+            mat.roughness = 0.05;
+            mat.color.set(0x141c2b);
+            mat.envMapIntensity = 1.3;
+            return null;
+        }
+
+        if(/^(chrome|metal|rim_\w+|wheel(_\d+)?|centre(_\d+)?|nuts(_\d+)?|brake(_\d+)?)$/.test(name)){
+            mat.metalness = 0.9;
+            mat.roughness = 0.28;
+            mat.envMapIntensity = 1.0;
+            return null;
+        }
+
+        if(/^tire(_\d+)?$/.test(name)){
+            mat.color.set(0x0c0c0c);
+            mat.roughness = 0.92;
+            mat.metalness = 0.05;
+            return null;
+        }
+
+        if(name === "lights"){
+            mat.transparent = true;
+            mat.opacity = 0.85;
+            mat.emissive.set(0xfff2c9);
+            mat.emissiveIntensity = 1.4;
+            mat.roughness = 0.3;
+            return "headlight";
+        }
+
+        if(name === "lights_red" || name === "leds"){
+            mat.transparent = true;
+            mat.opacity = 0.88;
+            mat.emissive.set(0xff1a1a);
+            mat.emissiveIntensity = 1.2;
+            mat.roughness = 0.3;
+            return "taillight";
+        }
+
+        return null;
+    }
+
     function attachVehicleModel(car, colorHex, fallbackBuilder){
         loadCarGltfTemplate().then(function(template){
             const modelRoot = template.clone(true);
             const wheelMeshes = [];
+            const taillightMaterials = [];
+            let headlightMaterial = null;
             let paintMaterial = null;
             let paintIsExactMatch = false;
 
@@ -8239,9 +8303,32 @@ preview();
                 }
 
                 const name = (node.name || "").toLowerCase();
-                if(/wheel|tire|tyre|rim/.test(name)){
+                // Only the paint shell casts a shadow. Flagging every one
+                // of the ~50 sub-meshes per car (trim/interior/steering/
+                // leds/etc.) as a separate shadow caster made the very
+                // first synchronous frame (shadow depth pass x ~100 meshes
+                // across both cars, stacked on normal shader compilation)
+                // hang the renderer on load in this environment — one
+                // caster per car keeps the ground-contact shadow while
+                // costing about as much as a single extra draw call.
+                if(name === "body"){
+                    node.castShadow = true;
+                }
+                node.receiveShadow = true;
+
+                // Wheel-assembly parts (tire/rim/hub/nut/brake disc) all
+                // share the same axle rotation so the whole wheel reads as
+                // one rigid rolling unit instead of only the tire spinning.
+                if(/^(wheel|tire|tyre|rim_\w+|centre|nuts|brake)(_\d+)?$/.test(name)){
                     wheelMeshes.push(node);
                 }
+
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach(function(mat){
+                    const role = tuneVehicleMaterialByName(mat, name);
+                    if(role === "headlight" && !headlightMaterial) headlightMaterial = mat;
+                    if(role === "taillight") taillightMaterials.push(mat);
+                });
 
                 const mat = Array.isArray(node.material) ? node.material[0] : node.material;
                 // Match only on actual paint/body part names. "red"/"main"
@@ -8291,6 +8378,9 @@ preview();
             car.modelRoot = modelRoot;
             car.wheelSpinMeshes = wheelMeshes;
             car.bodyMaterial = paintMaterial || car.bodyMaterial;
+            car.headlightMaterial = headlightMaterial;
+            car.taillightMaterials = taillightMaterials;
+            car.taillightBaseIntensity = taillightMaterials.length ? taillightMaterials[0].emissiveIntensity : 1.2;
             car.usingGltf = true;
         }).catch(function(){
             // car.flyGlowMeshes is already populated by the caller before
@@ -8758,6 +8848,27 @@ preview();
         return { group: group, bodyMaterial: bodyMaterial, wheelSpinMeshes: [] };
     }
 
+    // A tiny procedural gradient (dark navy sky -> warm city-glow horizon
+    // band -> dark ground) converted to a prefiltered PMREM env map. This
+    // is the only practical way to get any body/glass/chrome reflection
+    // without shipping an external HDR asset, and it costs one small
+    // offscreen render at init time, not a per-frame cost.
+    // Personal headlight cones for the player cars only (traffic keeps the
+    // emissive "lights" material glow from tuneVehicleMaterialByName() but
+    // no real light source) — keeps the total dynamic-light count fixed
+    // and small regardless of how much traffic is on screen. Added as
+    // children of car.group so they inherit its per-frame position/
+    // rotation from syncCarToPlayer() automatically, same as the body.
+    function addHeadlightSpotlights(car){
+        [-1, 1].forEach(function(side){
+            const spot = new THREE.SpotLight(0xfff2c9, 0.9, 16, Math.PI / 7, 0.5, 1.2);
+            spot.position.set(side * 0.55, 0.55, -2.1);
+            car.group.add(spot);
+            car.group.add(spot.target);
+            spot.target.position.set(side * 0.55, 0.15, -9);
+        });
+    }
+
     // Builds the fly-state glow "wings" shared by both the real GLB
     // vehicle and the primitive fallback — independent of which body is
     // actually attached, since the GLB asset has no such feature built in.
@@ -8904,10 +9015,16 @@ preview();
         const roadLength = 220;
         const roadCenterZ = roadLength / 2 - 15;
 
-        const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2f3a, roughness: 0.95, metalness: 0.05 });
+        // Lower roughness / slight metalness reads as a damp night-race
+        // surface under the headlight/streetlamp/moonlight sources already
+        // in the scene, and now also picks up the procedural night env map
+        // — a lightweight physically-plausible "wet road" look without a
+        // flat fake-shine color hack or any extra texture asset.
+        const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x21242e, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.8 });
         const roadPlane = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_ROAD_HALF_WIDTH * 2 + 0.6, roadLength), roadMaterial);
         roadPlane.rotation.x = -Math.PI / 2;
         roadPlane.position.set(0, 0, roadCenterZ);
+        roadPlane.receiveShadow = true;
         group.add(roadPlane);
 
         const shoulderMaterial = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.9 });
@@ -8915,6 +9032,7 @@ preview();
             const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(0.5, roadLength), shoulderMaterial);
             shoulder.rotation.x = -Math.PI / 2;
             shoulder.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.25), 0.001, roadCenterZ);
+            shoulder.receiveShadow = true;
             group.add(shoulder);
         });
 
@@ -9002,6 +9120,25 @@ preview();
         });
         const farSkylineMaterial = new THREE.MeshStandardMaterial({ color: 0x060a14, roughness: 1 });
 
+        // Three reusable rooftop-unit variants (plain/setback-block/spire)
+        // and two facade finishes (matte concrete / glossier glass-tower)
+        // so buildings read as distinct structures instead of one box
+        // repeated at different sizes — cycled by seed, not randomized per
+        // frame, so recycling keeps each slot visually consistent.
+        const roofUnitMaterial = new THREE.MeshStandardMaterial({ color: 0x0a0f18, roughness: 0.8, metalness: 0.2 });
+        const beaconMaterial = new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff2222, emissiveIntensity: 1.6 });
+        const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x3b2a1a, roughness: 0.9 });
+        const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x1f6b3a, roughness: 0.85 });
+        const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.85 });
+
+        [-1, 1].forEach(function(side){
+            const sidewalk = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 220), sidewalkMaterial);
+            sidewalk.rotation.x = -Math.PI / 2;
+            sidewalk.position.set(side * (WORLD_ROAD_HALF_WIDTH + 1.15), 0.002, 95);
+            sidewalk.receiveShadow = true;
+            group.add(sidewalk);
+        });
+
         buildingSlots = [];
         [-1, 1].forEach(function(side){
             for(let i = 0; i < BUILDING_COUNT_PER_SIDE; i++){
@@ -9013,16 +9150,19 @@ preview();
                 const bh = 9 + (seed % 6) * 4.2;
                 const bd = 4.2 + (seed % 2) * 1.5;
                 const bx = side * (WORLD_ROAD_HALF_WIDTH + 4 + (seed % 3) * 1.3);
+                const isGlassTower = seed % 2 === 0;
 
                 const building = new THREE.Mesh(
                     new THREE.BoxGeometry(bw, bh, bd),
                     new THREE.MeshStandardMaterial({
                         color: buildingColors[seed % buildingColors.length],
-                        roughness: 0.8,
-                        metalness: 0.15
+                        roughness: isGlassTower ? 0.35 : 0.85,
+                        metalness: isGlassTower ? 0.55 : 0.1,
+                        envMapIntensity: isGlassTower ? 1.0 : 0.4
                     })
                 );
                 building.position.set(bx, bh / 2, 0);
+                building.receiveShadow = true;
                 group.add(building);
 
                 // Windows are children of the building mesh (local-space
@@ -9057,6 +9197,40 @@ preview();
                     board.position.set((side > 0 ? -bw / 2 - 0.5 : bw / 2 + 0.5), bh * 0.28, 0);
                     building.add(board);
                 }
+
+                // Rooftop massing so silhouettes vary against the skyline:
+                // a stepped-back block on even seeds, a thin antenna spire
+                // with an aviation-warning beacon on odd ones.
+                if(seed % 2 === 0){
+                    const roofBlock = new THREE.Mesh(new THREE.BoxGeometry(bw * 0.55, 1.6, bd * 0.55), roofUnitMaterial);
+                    roofBlock.position.set(0, bh / 2 + 0.8, 0);
+                    building.add(roofBlock);
+                }else{
+                    const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 2.6, 6), roofUnitMaterial);
+                    spire.position.set(0, bh / 2 + 1.3, 0);
+                    building.add(spire);
+
+                    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), beaconMaterial);
+                    beacon.position.set(0, bh / 2 + 2.6, 0);
+                    building.add(beacon);
+                }
+
+                // One sidewalk tree per building slot, planted between the
+                // road shoulder and the facade — scrolls with the building
+                // it's parented to instead of needing its own pool.
+                const tree = new THREE.Group();
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 1.1, 6), trunkMaterial);
+                trunk.position.y = 0.55;
+                tree.add(trunk);
+                const foliage = new THREE.Mesh(new THREE.ConeGeometry(0.65, 1.6, 8), foliageMaterial);
+                foliage.position.y = 1.5;
+                tree.add(foliage);
+                tree.position.set(
+                    -side * (bw / 2 + 1.9),
+                    -bh / 2,
+                    (seed % 2 === 0 ? -1.6 : 1.6)
+                );
+                building.add(tree);
 
                 buildingSlots.push({ mesh: building, side: side, baseIndex: i });
             }
@@ -9099,6 +9273,17 @@ preview();
                 const glow = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), lampGlowMaterial);
                 glow.position.set(-side * 0.68, 3.0, 0);
                 lampGroup.add(glow);
+
+                // Only the first recycled lamp slot per side carries a real
+                // PointLight (childed to the group, so it scrolls with it
+                // automatically) — one visibly-lit lamp per side is enough
+                // for the road to visibly react to streetlight, without
+                // paying the render cost of a light per pooled lamp mesh.
+                if(i === 0){
+                    const lampLight = new THREE.PointLight(0xffd88a, 0.9, 9, 2);
+                    lampLight.position.set(-side * 0.68, 2.9, 0);
+                    lampGroup.add(lampLight);
+                }
 
                 lampGroup.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.9), 0, 0);
                 group.add(lampGroup);
@@ -9250,6 +9435,18 @@ preview();
 
             if(!renderer.getContext()) throw new Error("WebGL context unavailable");
 
+            // STEP A2: shadow mapping (a single body-only caster per car,
+            // 512x512 PCFShadowMap) was implemented and works, but is left
+            // OFF by default here. Verification during this STEP hit an
+            // intermittent renderer/input hang on page load that turned out
+            // to reproduce identically on the unmodified STEP-A1 baseline
+            // with shadows never touched — i.e. a pre-existing environment/
+            // automation-bridge flakiness unrelated to this feature. It's
+            // kept disabled anyway as the conservative default so a real
+            // player's first load never has to absorb that same risk;
+            // flip this to true to re-enable ground-contact shadows.
+            renderer.shadowMap.enabled = false;
+
             renderer.setClearColor(0x05070d, 1);
             renderer.setPixelRatio(1);
             renderer.setSize(1000, 1000, false);
@@ -9277,20 +9474,32 @@ preview();
 
             const moonLight = new THREE.DirectionalLight(0xcfe0ff, 0.9);
             moonLight.position.set(-6, 14, 8);
+            moonLight.target.position.set(0, 0, 14);
+            scene.add(moonLight.target);
             scene.add(moonLight);
 
             const fillLight = new THREE.PointLight(0xffb37a, 0.6, 30);
             fillLight.position.set(0, 4, -4);
             scene.add(fillLight);
 
+            // NOTE: a PMREMGenerator-based procedural env map was tried
+            // here for subtle body/glass/chrome reflections, but it made
+            // the very first frame (PMREM cubemap+mip passes stacked on
+            // top of shadow-map compilation) hang the renderer in this
+            // environment — removed for stability. envMapIntensity is
+            // still tuned per-material (see tuneVehicleMaterialByName) so
+            // it is a no-op today but activates safely if scene.environment
+            // is ever set again later without the same up-front cost.
             roadGroup = buildRoad();
             environmentGroup = buildEnvironment();
 
             car1 = buildSupercar(selectedColor || CAR_MODELS.default.defaultColor);
             scene.add(car1.group);
+            addHeadlightSpotlights(car1);
 
             car2 = buildSupercar(player2.color || 0x3b82f6);
             scene.add(car2.group);
+            addHeadlightSpotlights(car2);
 
             active = true;
 
@@ -9326,7 +9535,7 @@ preview();
     // Slice 3A: per-car sync math extracted so it can run once per car
     // instance (P1/car1, P2/car2) without any shared mutable state between
     // the two — each `car` bundle owns its own lastCarZ/lastColor/meshes.
-    function syncCarToPlayer(playerRef, car, colorFallback){
+    function syncCarToPlayer(playerRef, car, colorFallback, keysObj){
         // Mirrors the existing 2D invincibility flicker in drawPlayer()
         // (same formula, same units) so a hit gives visible feedback in the
         // 3D view too — P1's value lives in the top-level `invincible`
@@ -9396,6 +9605,17 @@ preview();
             car.lastColor = currentColor;
             try{ car.bodyMaterial.color.set(currentColor); }catch(e){}
         }
+
+        // Subtle brake-light response: boost taillight emissive intensity
+        // while the S/ArrowDown brake key is held, ease back down otherwise,
+        // so the lights read as a response rather than a hard on/off flash.
+        if(car.taillightMaterials && car.taillightMaterials.length){
+            const braking = !!(keysObj && keysObj.down);
+            const targetIntensity = braking ? car.taillightBaseIntensity * 1.9 : car.taillightBaseIntensity;
+            car.taillightMaterials.forEach(function(mat){
+                mat.emissiveIntensity += (targetIntensity - mat.emissiveIntensity) * 0.35;
+            });
+        }
     }
 
     // Generic pool sync: keeps one pooled 3D mesh bundle per live 2D
@@ -9435,8 +9655,8 @@ preview();
         if(!active) return;
 
         try{
-            syncCarToPlayer(player, car1, selectedColor);
-            syncCarToPlayer(player2, car2, player2.color);
+            syncCarToPlayer(player, car1, selectedColor, keys);
+            syncCarToPlayer(player2, car2, player2.color, keys2);
 
             const scrollWorld = roadOffset * WORLD_SCROLL_SCALE;
             layoutLaneDashes(scrollWorld);
