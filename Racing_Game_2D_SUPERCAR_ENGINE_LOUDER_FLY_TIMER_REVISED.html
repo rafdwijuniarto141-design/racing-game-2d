@@ -744,6 +744,27 @@ canvas{
 .garage-close{margin-top:12px;background:#1b344e;color:#fff;width:100%}
 .garage-note{font-size:11px;color:#9bb1c8;line-height:1.5;margin-top:10px}
 
+.vehicle-garage-layout{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+#garagePreviewCanvas{
+    width:280px;height:190px;border-radius:12px;border:1px solid #365773;
+    background:#05070d;display:block;
+}
+.vehicle-model-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px}
+.vehicle-model-card{
+    padding:10px;border-radius:11px;border:1px solid #294762;background:#07111e;
+    cursor:pointer;text-align:left;color:#e5e7eb;
+}
+.vehicle-model-card.active{border-color:#facc15;background:#1b2a1b22;box-shadow:0 0 0 1px #facc15 inset}
+.vehicle-model-card strong{display:block;font-size:13px}
+.vehicle-model-card span{display:block;font-size:10px;color:#9bb1c8;margin-top:3px;line-height:1.4}
+.vehicle-color-grid{display:flex;gap:8px;flex-wrap:wrap}
+.vehicle-color-swatch{
+    width:30px;height:30px;border-radius:50%;border:2px solid #ffffff33;
+    cursor:pointer;padding:0;
+}
+.vehicle-color-swatch.active{border-color:#facc15;box-shadow:0 0 0 2px #05070d,0 0 0 4px #facc15}
+@media(max-width:520px){.vehicle-model-grid{grid-template-columns:1fr}}
+
 </style>
 <style id="STEP2_REVISED_MUSIC_CSS">
 #step2MusicBtn{margin-top:8px;width:100%}
@@ -1047,8 +1068,33 @@ style="width:100%;margin-top:10px">
       <strong>🪙 COIN</strong>
       <strong id="garageCoinBalance">0</strong>
     </div>
-    <div id="garageUpgradeList"></div><section id="STEP2_REVISED_VEHICLES" style="margin-top:18px">
-<h3>🏎️ KENDARAAN PEMAIN</h3>
+    <div id="garageUpgradeList"></div>
+
+    <!-- STEP A3: real GLB supercar model + paint color selection. Separate
+         from the legacy vehicle-TYPE picker below (car/motorcycle/bicycle,
+         which has no dedicated 3D geometry for its non-car options) — this
+         section is specifically the "which real 3D car, which paint"
+         Garage requirement. -->
+    <section id="vehicleGarageSection" style="margin-top:18px">
+      <h3>🏁 SUPERCAR &amp; WARNA</h3>
+      <p style="font-size:12px;color:#9bb1c8;margin:0 0 10px">Pilih model mobil 3D asli dan warna cat bodi. Pratinjau menampilkan model, warna, kaca, dan lampu yang sebenarnya.</p>
+      <div id="garageSlotTabs" style="display:none;gap:8px;margin-bottom:10px">
+        <button type="button" data-slot="p1" class="btn" style="flex:1;padding:8px;background:#1b344e;color:#fff">P1</button>
+        <button type="button" data-slot="p2" class="btn" style="flex:1;padding:8px;background:#1b344e;color:#fff">P2</button>
+      </div>
+      <div class="vehicle-garage-layout">
+        <div>
+          <canvas id="garagePreviewCanvas" width="280" height="190"></canvas>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <div id="garageVehicleGrid" class="vehicle-model-grid"></div>
+          <div id="garageColorGrid" class="vehicle-color-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="STEP2_REVISED_VEHICLES" style="margin-top:18px">
+<h3>🏎️ TIPE KENDARAAN</h3>
 <p>Motor dan sepeda lebih kecil dari mobil, dengan hitbox proporsional.</p>
 <div class="step2-vehicle-grid" id="step2VehicleGrid"></div>
 </section>
@@ -2042,6 +2088,12 @@ let speedBoostTime = 0;
 let invincible = 0;
 
 let selectedColor = "#ef4444";
+// STEP A3: which VEHICLE_LIBRARY entry P1/P2 currently race with. Read by
+// buildSupercar() at race start; written by the Garage vehicle picker
+// (loadVehicleGarageState()/the garageVehicleGrid click handler below) and,
+// for P2, its own small vehicle/color picker in the 2-player pre-race panel.
+let selectedVehicleId = "ferrari";
+let player2VehicleId = "ferrari";
 let gameMode = null;
 
 let playerName = "Player";
@@ -8115,15 +8167,33 @@ preview();
         return (refY - cy2d) * WORLD_Z_SCALE;
     }
 
+    // STEP A3 — visual road curvature. The 2D gameplay simulation stays
+    // perfectly linear/authoritative (collision, spawning, AI — none of it
+    // changes); this is a pure function of world Z added on top of
+    // mapWorldX's result wherever a lateral position is actually placed in
+    // the 3D scene, so every object (road surface, barriers, buildings,
+    // lamps, traffic, pickups, both player cars) sways sideways by exactly
+    // the same amount at the same world Z and nothing visually detaches
+    // from its gameplay object. A period of 140 with the ~95-unit visible
+    // draw distance (scene.fog ends at 95) reads as one gentle sweeping
+    // bend rather than a slalom.
+    const ROAD_CURVE_AMPLITUDE = 5;
+    const ROAD_CURVE_PERIOD = 140;
+    function roadCurveOffset(worldZ){
+        return Math.sin(worldZ * (Math.PI * 2 / ROAD_CURVE_PERIOD)) * ROAD_CURVE_AMPLITUDE;
+    }
+
     function worldPosForBox(obj){
+        const z = mapWorldZ(obj.y + (obj.height || 0) / 2);
         return {
-            x: mapWorldX(obj.x + (obj.width || 0) / 2),
-            z: mapWorldZ(obj.y + (obj.height || 0) / 2)
+            x: mapWorldX(obj.x + (obj.width || 0) / 2) + roadCurveOffset(z),
+            z: z
         };
     }
 
     function worldPosForPoint(obj){
-        return { x: mapWorldX(obj.x), z: mapWorldZ(obj.y) };
+        const z = mapWorldZ(obj.y);
+        return { x: mapWorldX(obj.x) + roadCurveOffset(z), z: z };
     }
 
     // Shared (non-per-instance) materials/geometries for traffic and
@@ -8154,44 +8224,88 @@ preview();
     });
 
     // ================================================================
-    // REAL GLB VEHICLE ASSET (STEP: realistic 3D supercar/traffic)
-    // A single enclosed-body supercar model (assets/models/ferrari.glb,
-    // sourced from the official three.js example assets, MIT-licensed
-    // repository) is loaded once via GLTFLoader and cloned for the
-    // player car(s) and every pooled traffic vehicle, recolored per
-    // instance. If the asset fails to load (offline, blocked, etc.) each
-    // caller falls back to the existing hand-built primitive geometry
-    // (buildCar()/the box-based traffic body below) so the game never
-    // renders an empty car.
+    // REAL GLB VEHICLE ASSETS (STEP A3: Garage vehicle-model selection)
+    // Two verified, distinct, permissively-licensed models:
+    //  - "ferrari": three.js official example assets (mrdoob/three.js,
+    //    MIT-licensed repo). Real-world scale already (2.26x1.24x4.53m);
+    //    native front is local -Z (see its "lights"/"lights_red" mesh
+    //    positions, measured directly from the loaded asset).
+    //  - "toycar": Khronos glTF-Sample-Models "ToyCar", CC0 (public
+    //    domain), created by Guido Odendahl. Modeled at real toy scale
+    //    (~7cm) with only 3 meshes (ToyCar/Glass/Fabric, no separate
+    //    wheel/tire geometry) — scaled up ~31x to match the Ferrari's
+    //    width so it sits on the road at a comparable footprint. Because
+    //    it has no dedicated body-paint mesh, the existing "largest mesh
+    //    by volume" fallback in attachVehicleModel() tints its single
+    //    "ToyCar" body+wheel mesh as one piece, and its wheels do not
+    //    spin independently — disclosed as a known asset limitation
+    //    rather than hidden.
+    // Each caller falls back to the existing hand-built primitive
+    // geometry if a GLB fails to load, so the game never renders an
+    // empty car.
     // ================================================================
-    const CAR_MODEL_URL = "assets/models/ferrari.glb";
-    // Measured directly from the loaded asset (see PHASE 1/2 verification):
-    // bounding box 2.26m (W) x 1.24m (H) x 4.53m (L) — already real-world
-    // scale, so no rescale is needed. Its "lights" (headlight) mesh sits
-    // at local z=-1.85 and "lights_red" (taillight) at z=+0.91, i.e. the
-    // model's native front is local -Z — exactly the same convention the
-    // rest of this file already uses for the primitive car — so no extra
-    // yaw is applied here; syncCarToPlayer()'s existing 180-degree group
-    // rotation for player cars (and no rotation for traffic) is reused
-    // unchanged. Wheels already sit at y~=0, hence the near-zero offset.
-    const CAR_MODEL_SCALE = 1.0;
-    const CAR_MODEL_YAW = 0;
-    const CAR_MODEL_Y_OFFSET = 0.005;
+    const VEHICLE_COLOR_PALETTE = [
+        { id: "red", label: "Red", hex: 0xef4444 },
+        { id: "blue", label: "Blue", hex: 0x3b82f6 },
+        { id: "yellow", label: "Yellow", hex: 0xfacc15 },
+        { id: "black", label: "Black", hex: 0x111318 },
+        { id: "white", label: "White", hex: 0xf2f4f6 },
+        { id: "green", label: "Green", hex: 0x22c55e }
+    ];
 
-    let carGltfTemplate = null;
-    let carGltfLoadPromise = null;
+    const VEHICLE_LIBRARY = [
+        {
+            id: "ferrari",
+            name: "Ferrari GT",
+            source: "three.js official example assets (mrdoob/three.js, MIT license)",
+            modelUrl: "assets/models/ferrari.glb",
+            scale: 1.0,
+            yaw: 0,
+            yOffset: 0.005,
+            colors: VEHICLE_COLOR_PALETTE
+        },
+        {
+            id: "toycar",
+            name: "Toy Racer",
+            source: "Khronos glTF-Sample-Models \"ToyCar\" by Guido Odendahl, CC0/public domain",
+            modelUrl: "assets/models/toycar.glb",
+            // The asset's own bounding box is dominated by a "Fabric"
+            // display-cloth prop the toy sits on in its sample scene
+            // (0.073m) — hidden via hideMeshNames below. Measured from the
+            // "ToyCar" mesh alone (0.0187 x 0.0116 x 0.0384m) and scaled to
+            // match the Ferrari's width (2.26m / 0.0187m ≈ 120.9), which
+            // also lands its length within ~2% of the Ferrari's.
+            scale: 120.9,
+            yaw: 0,
+            yOffset: -0.12,
+            hideMeshNames: ["fabric"],
+            colors: VEHICLE_COLOR_PALETTE
+        }
+    ];
 
-    function loadCarGltfTemplate(){
-        if(carGltfTemplate) return Promise.resolve(carGltfTemplate);
-        if(carGltfLoadPromise) return carGltfLoadPromise;
+    function getVehicleDef(id){
+        return VEHICLE_LIBRARY.find(function(v){ return v.id === id; }) || VEHICLE_LIBRARY[0];
+    }
 
-        carGltfLoadPromise = new Promise(function(resolve, reject){
+    // Per-URL template cache (a Map, not a single global) so multiple
+    // distinct GLB models can each be loaded once and reused across every
+    // player/traffic instance that selects them, same caching contract as
+    // STEP A1/A2's single-model version.
+    const gltfTemplateCache = new Map();
+
+    function loadCarGltfTemplate(modelUrl){
+        const url = modelUrl || VEHICLE_LIBRARY[0].modelUrl;
+        const cached = gltfTemplateCache.get(url);
+        if(cached && cached.template) return Promise.resolve(cached.template);
+        if(cached && cached.promise) return cached.promise;
+
+        const promise = new Promise(function(resolve, reject){
             if(typeof THREE.GLTFLoader !== "function"){
                 reject(new Error("GLTFLoader not available"));
                 return;
             }
             const loader = new THREE.GLTFLoader();
-            // ferrari.glb ships with Draco-compressed geometry; without a
+            // Both assets ship Draco-compressed geometry; without a
             // configured DRACOLoader, GLTFLoader throws "No DRACOLoader
             // instance provided" and the whole asset fails to parse.
             if(typeof THREE.DRACOLoader === "function"){
@@ -8200,20 +8314,22 @@ preview();
                 loader.setDRACOLoader(dracoLoader);
             }
             loader.load(
-                CAR_MODEL_URL,
+                url,
                 function(gltf){
-                    carGltfTemplate = gltf.scene;
-                    resolve(carGltfTemplate);
+                    const entry = gltfTemplateCache.get(url);
+                    entry.template = gltf.scene;
+                    resolve(gltf.scene);
                 },
                 undefined,
                 function(err){
-                    console.warn("Supercar GLB failed to load, using primitive fallback car:", err);
+                    console.warn("Vehicle GLB failed to load (" + url + "), using primitive fallback car:", err);
                     reject(err);
                 }
             );
         });
 
-        return carGltfLoadPromise;
+        gltfTemplateCache.set(url, { template: null, promise: promise });
+        return promise;
     }
 
     // Clones the cached GLB template into `group`, gives the clone its
@@ -8263,6 +8379,18 @@ preview();
             return null;
         }
 
+        // The ToyCar sample asset's single body+wheel mesh ships with a
+        // very high metalness/near-zero roughness (tuned for its own demo
+        // env-map lookbook); without an env map in this scene it reads as
+        // near-black regardless of the selected paint color. Pull it down
+        // to a normal painted-plastic response so the chosen color is
+        // actually visible.
+        if(name === "toycar"){
+            mat.metalness = 0.35;
+            mat.roughness = 0.45;
+            return null;
+        }
+
         if(name === "lights"){
             mat.transparent = true;
             mat.opacity = 0.85;
@@ -8284,8 +8412,9 @@ preview();
         return null;
     }
 
-    function attachVehicleModel(car, colorHex, fallbackBuilder){
-        loadCarGltfTemplate().then(function(template){
+    function attachVehicleModel(car, colorHex, fallbackBuilder, vehicleDef){
+        const resolvedVehicleDef = vehicleDef || VEHICLE_LIBRARY[0];
+        loadCarGltfTemplate(resolvedVehicleDef.modelUrl).then(function(template){
             const modelRoot = template.clone(true);
             const wheelMeshes = [];
             const taillightMaterials = [];
@@ -8296,13 +8425,22 @@ preview();
             modelRoot.traverse(function(node){
                 if(!node.isMesh) return;
 
+                const name = (node.name || "").toLowerCase();
+                // Some assets (e.g. the ToyCar sample's "Fabric" display
+                // cloth) ship extra display-scene props alongside the
+                // actual vehicle mesh; hide those by name per-vehicle
+                // rather than rendering them as part of the race car.
+                if(resolvedVehicleDef.hideMeshNames && resolvedVehicleDef.hideMeshNames.indexOf(name) !== -1){
+                    node.visible = false;
+                    return;
+                }
+
                 if(Array.isArray(node.material)){
                     node.material = node.material.map(function(m){ return m.clone(); });
                 }else if(node.material){
                     node.material = node.material.clone();
                 }
 
-                const name = (node.name || "").toLowerCase();
                 // Only the paint shell casts a shadow. Flagging every one
                 // of the ~50 sub-meshes per car (trim/interior/steering/
                 // leds/etc.) as a separate shadow caster made the very
@@ -8351,7 +8489,7 @@ preview();
             if(!paintMaterial){
                 let largest = null, largestVolume = -1;
                 modelRoot.traverse(function(node){
-                    if(!node.isMesh || !node.geometry) return;
+                    if(!node.isMesh || !node.geometry || !node.visible) return;
                     if(!node.geometry.boundingBox) node.geometry.computeBoundingBox();
                     const bb = node.geometry.boundingBox;
                     const size = bb ? (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z) : 0;
@@ -8370,9 +8508,9 @@ preview();
                 paintMaterial.color.set(colorHex);
             }
 
-            modelRoot.rotation.y = CAR_MODEL_YAW;
-            modelRoot.scale.setScalar(CAR_MODEL_SCALE);
-            modelRoot.position.y = CAR_MODEL_Y_OFFSET;
+            modelRoot.rotation.y = resolvedVehicleDef.yaw;
+            modelRoot.scale.setScalar(resolvedVehicleDef.scale);
+            modelRoot.position.y = resolvedVehicleDef.yOffset;
 
             car.group.add(modelRoot);
             car.modelRoot = modelRoot;
@@ -8382,6 +8520,7 @@ preview();
             car.taillightMaterials = taillightMaterials;
             car.taillightBaseIntensity = taillightMaterials.length ? taillightMaterials[0].emissiveIntensity : 1.2;
             car.usingGltf = true;
+            car.vehicleId = resolvedVehicleDef.id;
         }).catch(function(){
             // car.flyGlowMeshes is already populated by the caller before
             // attachVehicleModel() runs (independent of GLB vs. primitive
@@ -8413,6 +8552,24 @@ preview();
     let buildingSlots = [];
     let lampSlots = [];
     let farSkylineSlots = [];
+    let bridgeSlot = null;
+    let tunnelSlot = null;
+    let signSlots = [];
+    let checkpointSlot = null;
+
+    // STEP A3: bridge/tunnel/road-sign recycling ranges — each appears once
+    // per this many world units of travel, same modulo-recycle pattern as
+    // buildings/lamps above, just with a single pooled instance instead of
+    // several, since these are meant to be occasional landmarks rather
+    // than a repeating background element.
+    const BRIDGE_RANGE = 170;
+    const BRIDGE_MIN_Z = -10;
+    const TUNNEL_RANGE = 230;
+    const TUNNEL_MIN_Z = -10;
+    const SIGN_PERIOD = 45;
+    const SIGN_COUNT = 5;
+    const SIGN_RANGE = SIGN_PERIOD * SIGN_COUNT;
+    const SIGN_MIN_Z = -8;
 
     function buildCar(model){
         model = model || CAR_MODELS.default;
@@ -8888,8 +9045,9 @@ preview();
     // Real GLB supercar (see "REAL GLB VEHICLE ASSET" above) used for both
     // the player car(s). Falls back to the existing hand-built primitive
     // buildCar() if the asset cannot be loaded.
-    function buildSupercar(color, variant){
+    function buildSupercar(color, vehicleId){
         const resolvedColor = (typeof color !== "undefined" && color !== null) ? color : CAR_MODELS.default.defaultColor;
+        const vehicleDef = getVehicleDef(vehicleId);
         const group = new THREE.Group();
         const flyGlowMeshes = buildFlyGlowWings(group, CAR3D_BASE_WIDTH);
 
@@ -8910,17 +9068,18 @@ preview();
                 wheelRadius: WHEEL_ROLL_RADIUS,
                 defaultColor: resolvedColor
             });
-        });
+        }, vehicleDef);
 
         return car;
     }
 
     // Real GLB traffic vehicle for the `enemies[]` gameplay array — same
-    // underlying asset as the player supercar, recolored per instance
-    // (see buildTrafficCar doc above for why a single vetted asset is
-    // reused rather than several distinct files). Falls back to a
-    // simpler hand-built primitive box-car if the GLB is unavailable.
-    function buildTrafficCar(colorHex){
+    // asset library as the player supercar, recolored (and, when a
+    // vehicleId is supplied, sometimes model-varied) per instance. Falls
+    // back to a simpler hand-built primitive box-car if the GLB is
+    // unavailable.
+    function buildTrafficCar(colorHex, vehicleId){
+        const vehicleDef = getVehicleDef(vehicleId);
         const group = new THREE.Group();
         const flyGlowMeshes = buildFlyGlowWings(group, CAR3D_BASE_WIDTH);
 
@@ -8937,7 +9096,7 @@ preview();
 
         attachVehicleModel(car, colorHex, function(){
             return buildPrimitiveTrafficCar(colorHex);
-        });
+        }, vehicleDef);
 
         return car;
     }
@@ -9010,10 +9169,42 @@ preview();
     // `roadOffset` value the 2D game already advances every frame, so
     // the world visibly scrolls in sync with race progress.
     // ================================================================
+    // Bends a flat ground plane (rotation.x = -PI/2, so local (x,y,0)
+    // becomes world (x, 0, meshZ - y)) so it visually follows
+    // roadCurveOffset() along its length instead of running dead straight
+    // — the same additive offset every other scrolling object applies at
+    // its own world Z, baked once into static vertex data here since this
+    // particular mesh is never repositioned per frame.
+    function bendFlatPlane(geometry, meshZ){
+        const pos = geometry.attributes.position;
+        for(let i = 0; i < pos.count; i++){
+            const localY = pos.getY(i);
+            const worldZ = meshZ - localY;
+            pos.setX(i, pos.getX(i) + roadCurveOffset(worldZ));
+        }
+        pos.needsUpdate = true;
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+
+    // Same idea for an upright box (no rotation) whose local Z axis maps
+    // directly to world Z once translated by meshZ.
+    function bendUprightBox(geometry, meshZ){
+        const pos = geometry.attributes.position;
+        for(let i = 0; i < pos.count; i++){
+            const worldZ = meshZ + pos.getZ(i);
+            pos.setX(i, pos.getX(i) + roadCurveOffset(worldZ));
+        }
+        pos.needsUpdate = true;
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+
     function buildRoad(){
         const group = new THREE.Group();
         const roadLength = 220;
         const roadCenterZ = roadLength / 2 - 15;
+        const lengthSegments = Math.round(roadLength / 5);
 
         // Lower roughness / slight metalness reads as a damp night-race
         // surface under the headlight/streetlamp/moonlight sources already
@@ -9021,7 +9212,8 @@ preview();
         // — a lightweight physically-plausible "wet road" look without a
         // flat fake-shine color hack or any extra texture asset.
         const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x21242e, roughness: 0.55, metalness: 0.35, envMapIntensity: 0.8 });
-        const roadPlane = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_ROAD_HALF_WIDTH * 2 + 0.6, roadLength), roadMaterial);
+        const roadGeo = bendFlatPlane(new THREE.PlaneGeometry(WORLD_ROAD_HALF_WIDTH * 2 + 0.6, roadLength, 1, lengthSegments), roadCenterZ);
+        const roadPlane = new THREE.Mesh(roadGeo, roadMaterial);
         roadPlane.rotation.x = -Math.PI / 2;
         roadPlane.position.set(0, 0, roadCenterZ);
         roadPlane.receiveShadow = true;
@@ -9029,7 +9221,8 @@ preview();
 
         const shoulderMaterial = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.9 });
         [-1, 1].forEach(function(side){
-            const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(0.5, roadLength), shoulderMaterial);
+            const shoulderGeo = bendFlatPlane(new THREE.PlaneGeometry(0.5, roadLength, 1, lengthSegments), roadCenterZ);
+            const shoulder = new THREE.Mesh(shoulderGeo, shoulderMaterial);
             shoulder.rotation.x = -Math.PI / 2;
             shoulder.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.25), 0.001, roadCenterZ);
             shoulder.receiveShadow = true;
@@ -9038,7 +9231,8 @@ preview();
 
         const grassMaterial = new THREE.MeshStandardMaterial({ color: 0x1d6b3c, roughness: 1 });
         [-1, 1].forEach(function(side){
-            const grass = new THREE.Mesh(new THREE.PlaneGeometry(10, roadLength), grassMaterial);
+            const grassGeo = bendFlatPlane(new THREE.PlaneGeometry(10, roadLength, 1, lengthSegments), roadCenterZ);
+            const grass = new THREE.Mesh(grassGeo, grassMaterial);
             grass.rotation.x = -Math.PI / 2;
             grass.position.set(side * (WORLD_ROAD_HALF_WIDTH + 5.6), -0.01, roadCenterZ);
             group.add(grass);
@@ -9046,14 +9240,16 @@ preview();
 
         const barrierRailMaterial = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, metalness: 0.2 });
         [-1, 1].forEach(function(side){
-            const rail = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.35, roadLength), barrierRailMaterial);
+            const railGeo = bendUprightBox(new THREE.BoxGeometry(0.18, 0.35, roadLength, 1, 1, lengthSegments), roadCenterZ);
+            const rail = new THREE.Mesh(railGeo, barrierRailMaterial);
             rail.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.5), 0.17, roadCenterZ);
             group.add(rail);
 
             const railStripeMaterial2 = barrierStripeMaterial;
             for(let i = 0; i < 18; i++){
+                const stripeZ = i * 12 - 15;
                 const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.19, 0.36, 1.4), railStripeMaterial2);
-                stripe.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.5), 0.18, i * 12 - 15);
+                stripe.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.5) + roadCurveOffset(stripeZ), 0.18, stripeZ);
                 group.add(stripe);
             }
         });
@@ -9085,8 +9281,12 @@ preview();
         for(let i = 0; i < LANE_DASH_COUNT; i++){
             let z = (i * LANE_PERIOD - offset) % LANE_RANGE;
             if(z < 0) z += LANE_RANGE;
-            laneDashesLeft[i].position.z = LANE_MIN_Z + z;
-            laneDashesRight[i].position.z = LANE_MIN_Z + z;
+            const zPos = LANE_MIN_Z + z;
+            const curve = roadCurveOffset(zPos);
+            laneDashesLeft[i].position.z = zPos;
+            laneDashesLeft[i].position.x = -WORLD_ROAD_HALF_WIDTH / 3 + curve;
+            laneDashesRight[i].position.z = zPos;
+            laneDashesRight[i].position.x = WORLD_ROAD_HALF_WIDTH / 3 + curve;
         }
     }
 
@@ -9132,7 +9332,8 @@ preview();
         const sidewalkMaterial = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.85 });
 
         [-1, 1].forEach(function(side){
-            const sidewalk = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 220), sidewalkMaterial);
+            const sidewalkGeo = bendFlatPlane(new THREE.PlaneGeometry(1.3, 220, 1, 44), 95);
+            const sidewalk = new THREE.Mesh(sidewalkGeo, sidewalkMaterial);
             sidewalk.rotation.x = -Math.PI / 2;
             sidewalk.position.set(side * (WORLD_ROAD_HALF_WIDTH + 1.15), 0.002, 95);
             sidewalk.receiveShadow = true;
@@ -9232,7 +9433,7 @@ preview();
                 );
                 building.add(tree);
 
-                buildingSlots.push({ mesh: building, side: side, baseIndex: i });
+                buildingSlots.push({ mesh: building, side: side, baseIndex: i, baseX: bx });
             }
         });
 
@@ -9253,7 +9454,7 @@ preview();
                 );
                 building.position.set(bx, bh / 2, 0);
                 group.add(building);
-                farSkylineSlots.push({ mesh: building, side: side, baseIndex: i });
+                farSkylineSlots.push({ mesh: building, side: side, baseIndex: i, baseX: bx });
             }
         });
 
@@ -9285,11 +9486,171 @@ preview();
                     lampGroup.add(lampLight);
                 }
 
-                lampGroup.position.set(side * (WORLD_ROAD_HALF_WIDTH + 0.9), 0, 0);
+                const lampBaseX = side * (WORLD_ROAD_HALF_WIDTH + 0.9);
+                lampGroup.position.set(lampBaseX, 0, 0);
                 group.add(lampGroup);
-                lampSlots.push({ group: lampGroup, side: side });
+                lampSlots.push({ group: lampGroup, side: side, baseX: lampBaseX });
             }
         });
+
+        // --------------------------------------------------------------
+        // STEP A3: overpass/bridge — real 3D geometry (columns + deck +
+        // railings + underside lights), spanning across and above the
+        // road. A single recycled instance (BRIDGE_RANGE-period) rather
+        // than a repeating background element, since a bridge is meant to
+        // read as an occasional landmark.
+        // --------------------------------------------------------------
+        (function buildBridge(){
+            const bridgeGroup = new THREE.Group();
+            const deckY = 5.6;
+            const spanHalf = WORLD_ROAD_HALF_WIDTH + 2.4;
+            const columnMaterial = new THREE.MeshStandardMaterial({ color: 0x384252, roughness: 0.75, metalness: 0.3 });
+            const deckMaterial = new THREE.MeshStandardMaterial({ color: 0x232a35, roughness: 0.65, metalness: 0.35 });
+            const railMaterial = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5, metalness: 0.2 });
+            const bridgeLightMaterial = new THREE.MeshStandardMaterial({ color: 0xfff2c9, emissive: 0xfff2c9, emissiveIntensity: 1.3 });
+
+            [-1, 1].forEach(function(side){
+                const column = new THREE.Mesh(new THREE.BoxGeometry(1.0, deckY, 1.4), columnMaterial);
+                column.position.set(side * spanHalf, deckY / 2, 0);
+                column.receiveShadow = true;
+                bridgeGroup.add(column);
+            });
+
+            const deck = new THREE.Mesh(new THREE.BoxGeometry(spanHalf * 2 + 1.6, 0.9, 5.2), deckMaterial);
+            deck.position.set(0, deckY, 0);
+            bridgeGroup.add(deck);
+
+            [-1, 1].forEach(function(edgeSide){
+                const rail = new THREE.Mesh(new THREE.BoxGeometry(spanHalf * 2 + 1.6, 0.5, 0.15), railMaterial);
+                rail.position.set(0, deckY + 0.65, edgeSide * 2.5);
+                bridgeGroup.add(rail);
+            });
+
+            for(let i = -1; i <= 1; i++){
+                const light = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), bridgeLightMaterial);
+                light.position.set(i * spanHalf * 0.7, deckY - 0.55, 0);
+                bridgeGroup.add(light);
+            }
+
+            bridgeGroup.position.z = 70;
+            group.add(bridgeGroup);
+            bridgeSlot = { group: bridgeGroup, baseX: 0 };
+        })();
+
+        // --------------------------------------------------------------
+        // STEP A3: tunnel section — enclosing walls + ceiling the road
+        // passes through. Kept deliberately simple (rectangular cross-
+        // section, no extra dynamic lights) after the STEP A2 finding that
+        // stacking too much shadow/light work onto the first frame caused
+        // renderer instability; the emissive ceiling strips give an
+        // interior-lighting cue without adding real light sources.
+        // --------------------------------------------------------------
+        (function buildTunnel(){
+            const tunnelGroup = new THREE.Group();
+            const tunnelLength = 16;
+            const tunnelWidth = WORLD_ROAD_HALF_WIDTH * 2 + 1.6;
+            const tunnelHeight = 4.6;
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x14181f, roughness: 0.85, metalness: 0.1 });
+            const ceilingLightMaterial = new THREE.MeshStandardMaterial({ color: 0xdcefff, emissive: 0xdcefff, emissiveIntensity: 1.1 });
+            const mouthMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2f3a, roughness: 0.7, metalness: 0.25 });
+
+            const ceiling = new THREE.Mesh(new THREE.BoxGeometry(tunnelWidth, 0.6, tunnelLength), wallMaterial);
+            ceiling.position.set(0, tunnelHeight, 0);
+            tunnelGroup.add(ceiling);
+
+            [-1, 1].forEach(function(side){
+                const wall = new THREE.Mesh(new THREE.BoxGeometry(0.5, tunnelHeight, tunnelLength), wallMaterial);
+                wall.position.set(side * (tunnelWidth / 2), tunnelHeight / 2, 0);
+                tunnelGroup.add(wall);
+            });
+
+            [-1, 1].forEach(function(mouthSide){
+                const mouth = new THREE.Mesh(new THREE.BoxGeometry(tunnelWidth + 1.2, tunnelHeight + 1.0, 0.6), mouthMaterial);
+                mouth.position.set(0, (tunnelHeight + 1.0) / 2, mouthSide * (tunnelLength / 2));
+                tunnelGroup.add(mouth);
+            });
+
+            for(let i = -1; i <= 1; i++){
+                const strip = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.1, 2.6), ceilingLightMaterial);
+                strip.position.set(0, tunnelHeight - 0.15, i * (tunnelLength / 3.2));
+                tunnelGroup.add(strip);
+            }
+
+            tunnelGroup.position.z = 70;
+            group.add(tunnelGroup);
+            tunnelSlot = { group: tunnelGroup, baseX: 0 };
+        })();
+
+        // --------------------------------------------------------------
+        // STEP A3: directional chevron / road-sign boards — pooled like
+        // the lamps, alternating a yellow directional-chevron board and a
+        // green distance/road sign board along both sides.
+        // --------------------------------------------------------------
+        signSlots = [];
+        const chevronMaterial = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xfacc15, emissiveIntensity: 0.35, roughness: 0.6 });
+        const signBoardMaterial = new THREE.MeshStandardMaterial({ color: 0x0f5132, roughness: 0.6 });
+        const signPostMaterial = new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.7 });
+        [-1, 1].forEach(function(side){
+            for(let i = 0; i < SIGN_COUNT; i++){
+                const signGroup = new THREE.Group();
+                const isChevron = i % 2 === 0;
+
+                const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.0, 6), signPostMaterial);
+                post.position.y = 1.0;
+                signGroup.add(post);
+
+                const board = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.08, isChevron ? 0.8 : 1.1, isChevron ? 0.8 : 1.6),
+                    isChevron ? chevronMaterial : signBoardMaterial
+                );
+                board.position.set(-side * 0.1, 2.0, 0);
+                signGroup.add(board);
+
+                const signBaseX = side * (WORLD_ROAD_HALF_WIDTH + 1.6);
+                signGroup.position.set(signBaseX, 0, 0);
+                group.add(signGroup);
+                signSlots.push({ group: signGroup, side: side, baseIndex: i, baseX: signBaseX });
+            }
+        });
+
+        // --------------------------------------------------------------
+        // STEP A3: start/finish + checkpoint visual — an overhead gantry
+        // with a checkered banner, fixed at the world-Z the race track
+        // itself already treats as its reference start (z=0 relative
+        // framing), so it always reads as "the" start/finish structure
+        // rather than a recycled repeating element.
+        // --------------------------------------------------------------
+        (function buildCheckpointGantry(){
+            const gantryGroup = new THREE.Group();
+            const gantryHeight = 4.4;
+            const spanHalf = WORLD_ROAD_HALF_WIDTH + 0.6;
+            const postMaterial = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.6, metalness: 0.3 });
+            const bannerMaterial = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, emissive: 0x222222, emissiveIntensity: 0.4, roughness: 0.5 });
+
+            [-1, 1].forEach(function(side){
+                const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, gantryHeight, 8), postMaterial);
+                post.position.set(side * spanHalf, gantryHeight / 2, 0);
+                gantryGroup.add(post);
+            });
+
+            const banner = new THREE.Mesh(new THREE.BoxGeometry(spanHalf * 2, 1.0, 0.15), bannerMaterial);
+            banner.position.set(0, gantryHeight, 0);
+            gantryGroup.add(banner);
+
+            // Simple checkered pattern via alternating small emissive tiles
+            // instead of a texture asset.
+            for(let i = 0; i < 8; i++){
+                if(i % 2 !== 0) continue;
+                const tile = new THREE.Mesh(new THREE.BoxGeometry(spanHalf * 2 / 8, 1.02, 0.17),
+                    new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 }));
+                tile.position.set(-spanHalf + (i + 0.5) * (spanHalf * 2 / 8), gantryHeight, 0);
+                gantryGroup.add(tile);
+            }
+
+            gantryGroup.position.set(roadCurveOffset(40), 0, 40);
+            group.add(gantryGroup);
+            checkpointSlot = { group: gantryGroup, baseX: 0, baseZ: 40 };
+        })();
 
         scene.add(group);
         return group;
@@ -9302,7 +9663,9 @@ preview();
         buildingSlots.forEach(function(slot){
             let z = (slot.baseIndex * BUILDING_PERIOD - bOffset) % BUILDING_RANGE;
             if(z < 0) z += BUILDING_RANGE;
-            slot.mesh.position.z = BUILDING_MIN_Z + z;
+            const zPos = BUILDING_MIN_Z + z;
+            slot.mesh.position.z = zPos;
+            slot.mesh.position.x = slot.baseX + roadCurveOffset(zPos);
         });
 
         let fOffset = scrollWorld % FAR_SKYLINE_RANGE;
@@ -9311,7 +9674,9 @@ preview();
         farSkylineSlots.forEach(function(slot){
             let z = (slot.baseIndex * FAR_SKYLINE_PERIOD - fOffset) % FAR_SKYLINE_RANGE;
             if(z < 0) z += FAR_SKYLINE_RANGE;
-            slot.mesh.position.z = FAR_SKYLINE_MIN_Z + z;
+            const zPos = FAR_SKYLINE_MIN_Z + z;
+            slot.mesh.position.z = zPos;
+            slot.mesh.position.x = slot.baseX + roadCurveOffset(zPos);
         });
 
         let lOffset = scrollWorld % LAMP_RANGE;
@@ -9320,7 +9685,41 @@ preview();
         lampSlots.forEach(function(slot, idx){
             let z = ((idx % LAMP_COUNT_PER_SIDE) * LAMP_PERIOD - lOffset) % LAMP_RANGE;
             if(z < 0) z += LAMP_RANGE;
-            slot.group.position.z = LAMP_MIN_Z + z;
+            const zPos = LAMP_MIN_Z + z;
+            slot.group.position.z = zPos;
+            slot.group.position.x = slot.baseX + roadCurveOffset(zPos);
+        });
+
+        // +80 phase offset on both: at scrollWorld=0 (race start) this
+        // lands each structure around world Z=70 — comfortably ahead of
+        // the player/camera — instead of AT world Z=-10, which put the
+        // tunnel's enclosing walls (they span +/-8 either side of their
+        // own Z) directly around the camera at the moment the race began.
+        if(bridgeSlot){
+            let z = (scrollWorld + 80) % BRIDGE_RANGE;
+            if(z < 0) z += BRIDGE_RANGE;
+            const zPos = BRIDGE_MIN_Z + z;
+            bridgeSlot.group.position.z = zPos;
+            bridgeSlot.group.position.x = bridgeSlot.baseX + roadCurveOffset(zPos);
+        }
+
+        if(tunnelSlot){
+            let z = (scrollWorld + 80) % TUNNEL_RANGE;
+            if(z < 0) z += TUNNEL_RANGE;
+            const zPos = TUNNEL_MIN_Z + z;
+            tunnelSlot.group.position.z = zPos;
+            tunnelSlot.group.position.x = tunnelSlot.baseX + roadCurveOffset(zPos);
+        }
+
+        let sOffset = scrollWorld % SIGN_RANGE;
+        if(sOffset < 0) sOffset += SIGN_RANGE;
+
+        signSlots.forEach(function(slot){
+            let z = (slot.baseIndex * SIGN_PERIOD - sOffset) % SIGN_RANGE;
+            if(z < 0) z += SIGN_RANGE;
+            const zPos = SIGN_MIN_Z + z;
+            slot.group.position.z = zPos;
+            slot.group.position.x = slot.baseX + roadCurveOffset(zPos);
         });
     }
 
@@ -9379,28 +9778,39 @@ preview();
         buildingSlots = [];
         lampSlots = [];
         farSkylineSlots = [];
+        bridgeSlot = null;
+        tunnelSlot = null;
+        signSlots = [];
+        checkpointSlot = null;
 
         const canvasEl = document.getElementById("carLayer3D");
         if(canvasEl) canvasEl.style.display = "none";
     }
 
-    // Slice 3E: minimal per-car rebuild hook. Swaps only the requested
-    // slot's group in the existing shared scene; the other car, renderer,
-    // scene, camera, and render loop are untouched. Not wired to any
-    // selection UI yet — this is the rebuild plumbing only.
-    function setCarModel(carSlot, model){
+    // Slice 3E / STEP A3: per-car rebuild hook used both by the legacy
+    // vehicle-type picker (window.set3DCarModel("car1"), no args — rebuild
+    // with whatever is currently selected) and by the new Garage vehicle/
+    // color selector (explicit colorHex + vehicleId). Swaps only the
+    // requested slot's group in the existing shared scene; the other car,
+    // renderer, scene, camera, and render loop are untouched.
+    function setCarModel(carSlot, colorHex, vehicleId){
         if(carSlot !== "car1" && carSlot !== "car2") return;
 
-        const resolvedModel = model || CAR_MODELS.default;
-        const current = carSlot === "car1" ? car1 : car2;
+        const isP1 = carSlot === "car1";
+        const resolvedColor = (colorHex !== undefined && colorHex !== null)
+            ? colorHex
+            : (isP1 ? selectedColor : player2.color);
+        const resolvedVehicleId = vehicleId || (isP1 ? selectedVehicleId : player2VehicleId);
+        const current = isP1 ? car1 : car2;
 
         if(current && current.group && scene){
             scene.remove(current.group);
         }
 
-        const rebuilt = buildSupercar(resolvedModel.defaultColor);
+        const rebuilt = buildSupercar(resolvedColor, resolvedVehicleId);
 
         if(scene) scene.add(rebuilt.group);
+        addHeadlightSpotlights(rebuilt);
 
         if(carSlot === "car1"){
             car1 = rebuilt;
@@ -9493,11 +9903,11 @@ preview();
             roadGroup = buildRoad();
             environmentGroup = buildEnvironment();
 
-            car1 = buildSupercar(selectedColor || CAR_MODELS.default.defaultColor);
+            car1 = buildSupercar(selectedColor || CAR_MODELS.default.defaultColor, selectedVehicleId);
             scene.add(car1.group);
             addHeadlightSpotlights(car1);
 
-            car2 = buildSupercar(player2.color || 0x3b82f6);
+            car2 = buildSupercar(player2.color || 0x3b82f6, player2VehicleId);
             scene.add(car2.group);
             addHeadlightSpotlights(car2);
 
@@ -9568,8 +9978,8 @@ preview();
         // already matches CAR3D_BASE_WIDTH, and player.width/height are
         // constant during gameplay, so a fixed scale is correct — no
         // per-frame scale recomputation needed.
-        const worldX = mapWorldX(playerRef.x + playerRef.width / 2);
         const worldZ = mapWorldZ(playerRef.y + playerRef.height / 2);
+        const worldX = mapWorldX(playerRef.x + playerRef.width / 2) + roadCurveOffset(worldZ);
 
         // The player drives away from this rear chase camera (world +Z is
         // "ahead"/toward the horizon), but the modeled car's own "front"
@@ -9663,7 +10073,13 @@ preview();
             layoutEnvironment(scrollWorld);
 
             syncSimplePool(enemies, trafficPool, function(e){
-                return buildTrafficCar(e.color);
+                // Deterministic per-instance model variety (derived from the
+                // enemy's own spawn speed, never written back to the 2D
+                // gameplay object) so traffic is not 100% one repeated
+                // model — a genuine minority of traffic uses the distinct
+                // "toycar" GLB rather than only recoloring the Ferrari.
+                const trafficVehicleId = Math.floor(e.speed) % 5 === 0 ? "toycar" : "ferrari";
+                return buildTrafficCar(e.color, trafficVehicleId);
             }, function(e){
                 return worldPosForBox(e);
             });
@@ -9713,8 +10129,11 @@ preview();
             // keep looking toward the horizon ahead of that same point.
             const targetX = mapWorldX(player.x + player.width / 2) * 0.6;
             cameraFollowX += (targetX - cameraFollowX) * 0.06;
-            camera.position.x = cameraFollowX;
-            camera.lookAt(cameraFollowX, 1, 20);
+            camera.position.x = cameraFollowX + roadCurveOffset(0);
+            // Look slightly toward wherever the curve bends 20 units
+            // ahead, not just straight down world Z, so the chase camera
+            // visibly anticipates the bend instead of looking past it.
+            camera.lookAt(cameraFollowX + roadCurveOffset(20), 1, 20);
 
             renderer.render(scene, camera);
 
@@ -9732,14 +10151,273 @@ preview();
         if(canvasEl) canvasEl.style.display = "none";
     }
 
+    // STEP A3: Garage preview support. Exposes the vehicle catalog (plain
+    // data, safe to read from outside the closure) and a builder that
+    // reuses the exact same cached-template + per-part tuning + paint
+    // logic as the real race car (loadCarGltfTemplate()'s Map cache means
+    // this never re-downloads a GLB the race already loaded, and vice
+    // versa), so the Garage preview is never a second, diverging
+    // implementation of "what does this car look like."
+    function buildVehiclePreviewModel(vehicleId, colorHex){
+        const vehicleDef = getVehicleDef(vehicleId);
+        return loadCarGltfTemplate(vehicleDef.modelUrl).then(function(template){
+            const modelRoot = template.clone(true);
+            let paintMaterial = null;
+            let paintIsExactMatch = false;
+
+            modelRoot.traverse(function(node){
+                if(!node.isMesh) return;
+                const name = (node.name || "").toLowerCase();
+                if(vehicleDef.hideMeshNames && vehicleDef.hideMeshNames.indexOf(name) !== -1){
+                    node.visible = false;
+                    return;
+                }
+                if(Array.isArray(node.material)){
+                    node.material = node.material.map(function(m){ return m.clone(); });
+                }else if(node.material){
+                    node.material = node.material.clone();
+                }
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach(function(mat){ tuneVehicleMaterialByName(mat, name); });
+
+                const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+                if(!paintIsExactMatch && mat && mat.color && /^(body|paint|carpaint)$/.test(name)){
+                    paintMaterial = mat;
+                    paintIsExactMatch = true;
+                }else if(!paintMaterial && mat && mat.color && /body|paint|carpaint/.test(name)){
+                    paintMaterial = mat;
+                }
+            });
+
+            if(!paintMaterial){
+                let largest = null, largestVolume = -1;
+                modelRoot.traverse(function(node){
+                    if(!node.isMesh || !node.geometry || !node.visible) return;
+                    if(!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+                    const bb = node.geometry.boundingBox;
+                    const size = bb ? (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z) : 0;
+                    if(size > largestVolume){ largestVolume = size; largest = node; }
+                });
+                if(largest){
+                    const mat = Array.isArray(largest.material) ? largest.material[0] : largest.material;
+                    if(mat && mat.color) paintMaterial = mat;
+                }
+            }
+
+            if(paintMaterial && colorHex !== null && typeof colorHex !== "undefined"){
+                paintMaterial.color.set(colorHex);
+            }
+
+            modelRoot.rotation.y = vehicleDef.yaw;
+            modelRoot.scale.setScalar(vehicleDef.scale);
+            modelRoot.position.y = vehicleDef.yOffset;
+            return modelRoot;
+        });
+    }
+
     window.init3DCarLayer = init3DCarLayer;
     window.update3DCarLayer = update3DCarLayer;
     window.destroy3DCarLayer = disable3DCarLayer;
     window.set3DCarModel = setCarModel;
+    window.VEHICLE_LIBRARY = VEHICLE_LIBRARY;
+    window.buildVehiclePreviewModel = buildVehiclePreviewModel;
 
 })();
 </script>
 
+
+<script id="STEP_A3_GARAGE_VEHICLES">
+(function(){
+    const KEY = "racingGame3D_garageVehicle_v1";
+
+    function loadState(){
+        let saved = null;
+        try{ saved = JSON.parse(localStorage.getItem(KEY) || "null"); }catch(e){ saved = null; }
+        if(!saved || typeof saved !== "object") saved = {};
+        return {
+            p1: { vehicleId: (saved.p1 && saved.p1.vehicleId) || "ferrari", color: (saved.p1 && saved.p1.color) || "#ef4444" },
+            p2: { vehicleId: (saved.p2 && saved.p2.vehicleId) || "ferrari", color: (saved.p2 && saved.p2.color) || "#3b82f6" }
+        };
+    }
+
+    function saveState(state){
+        try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){}
+    }
+
+    let state = loadState();
+    let activeSlot = "p1"; // which profile the Garage panel is currently editing
+
+    // Apply the persisted choice to the actual game globals the race reads
+    // from at start (selectedColor/selectedVehicleId for P1, player2.color/
+    // player2VehicleId for P2) as soon as this script runs, so a saved
+    // Garage selection takes effect even if the player never reopens the
+    // Garage this session.
+    function applyToGameState(){
+        if(typeof selectedColor !== "undefined") selectedColor = state.p1.color;
+        if(typeof selectedVehicleId !== "undefined") selectedVehicleId = state.p1.vehicleId;
+        if(typeof player2 !== "undefined") player2.color = state.p2.color;
+        if(typeof player2VehicleId !== "undefined") player2VehicleId = state.p2.vehicleId;
+    }
+    applyToGameState();
+
+    function colorToHex(c){
+        return (typeof c === "number") ? c : parseInt(String(c).replace("#", ""), 16);
+    }
+    function colorToCss(c){
+        return (typeof c === "number") ? "#" + c.toString(16).padStart(6, "0") : c;
+    }
+
+    // ---- Live preview (separate renderer/scene, reuses cached GLB via
+    // window.buildVehiclePreviewModel -> loadCarGltfTemplate's Map cache) ----
+    let previewRenderer = null, previewScene = null, previewCamera = null;
+    let previewModel = null, previewRafId = null, previewReqToken = 0;
+
+    function ensurePreview(){
+        if(previewRenderer || typeof THREE === "undefined") return;
+        const canvas = document.getElementById("garagePreviewCanvas");
+        if(!canvas) return;
+        previewRenderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: false, antialias: true });
+        previewRenderer.setClearColor(0x05070d, 1);
+        previewRenderer.setPixelRatio(1);
+        previewRenderer.setSize(280, 190, false);
+
+        previewScene = new THREE.Scene();
+        previewScene.background = new THREE.Color(0x05070d);
+        previewScene.fog = new THREE.Fog(0x05070d, 6, 22);
+
+        previewCamera = new THREE.PerspectiveCamera(38, 280 / 190, 0.1, 50);
+        previewCamera.position.set(3.1, 1.5, 4.2);
+        previewCamera.lookAt(0, 0.4, 0);
+
+        previewScene.add(new THREE.HemisphereLight(0x9db4ff, 0x14100c, 0.7));
+        const key = new THREE.DirectionalLight(0xffffff, 1.0);
+        key.position.set(-3, 5, 4);
+        previewScene.add(key);
+        const rim = new THREE.PointLight(0xfff2c9, 0.8, 12);
+        rim.position.set(2, 2, -3);
+        previewScene.add(rim);
+    }
+
+    function loadPreviewModel(vehicleId, colorHex){
+        ensurePreview();
+        if(!previewScene || typeof window.buildVehiclePreviewModel !== "function") return;
+        const token = ++previewReqToken;
+        window.buildVehiclePreviewModel(vehicleId, colorHex).then(function(modelRoot){
+            if(token !== previewReqToken) return; // a newer selection superseded this load
+            if(previewModel) previewScene.remove(previewModel);
+            modelRoot.rotation.y = Math.PI / 5;
+            previewScene.add(modelRoot);
+            previewModel = modelRoot;
+        }).catch(function(){});
+    }
+
+    function previewTick(){
+        previewRafId = requestAnimationFrame(previewTick);
+        if(previewModel) previewModel.rotation.y += 0.008;
+        if(previewRenderer && previewScene && previewCamera) previewRenderer.render(previewScene, previewCamera);
+    }
+
+    function startPreviewLoop(){
+        if(previewRafId !== null) return;
+        previewTick();
+    }
+    function stopPreviewLoop(){
+        if(previewRafId !== null){ cancelAnimationFrame(previewRafId); previewRafId = null; }
+    }
+
+    // ---- UI rendering ----
+    function vehicleLibrary(){
+        return (typeof window.VEHICLE_LIBRARY !== "undefined" && window.VEHICLE_LIBRARY.length)
+            ? window.VEHICLE_LIBRARY
+            : [{ id: "ferrari", name: "Ferrari GT", source: "", colors: [
+                {id:"red",label:"Red",hex:0xef4444},{id:"blue",label:"Blue",hex:0x3b82f6},
+                {id:"yellow",label:"Yellow",hex:0xfacc15},{id:"black",label:"Black",hex:0x111318},
+                {id:"white",label:"White",hex:0xf2f4f6},{id:"green",label:"Green",hex:0x22c55e}
+            ]}];
+    }
+
+    function renderVehicleGrid(){
+        const host = document.getElementById("garageVehicleGrid");
+        if(!host) return;
+        const sel = state[activeSlot];
+        host.innerHTML = vehicleLibrary().map(function(v){
+            const active = v.id === sel.vehicleId ? " active" : "";
+            return '<div class="vehicle-model-card' + active + '" data-vehicle-id="' + v.id + '">' +
+                '<strong>' + v.name + '</strong><span>' + (v.source || "") + '</span></div>';
+        }).join("");
+    }
+
+    function renderColorGrid(){
+        const host = document.getElementById("garageColorGrid");
+        if(!host) return;
+        const sel = state[activeSlot];
+        const def = vehicleLibrary().find(function(v){ return v.id === sel.vehicleId; }) || vehicleLibrary()[0];
+        host.innerHTML = def.colors.map(function(c){
+            const cssHex = colorToCss(c.hex);
+            const active = cssHex.toLowerCase() === String(sel.color).toLowerCase() ? " active" : "";
+            return '<button type="button" class="vehicle-color-swatch' + active + '" data-color="' + cssHex + '" style="background:' + cssHex + '" title="' + c.label + '"></button>';
+        }).join("");
+    }
+
+    function renderSlotTabs(){
+        const host = document.getElementById("garageSlotTabs");
+        if(!host) return;
+        host.style.display = (gameModeIsTwoPlayer() ? "flex" : "none");
+    }
+
+    function gameModeIsTwoPlayer(){
+        return typeof gameMode !== "undefined" && gameMode === "2P";
+    }
+
+    function renderAll(){
+        renderVehicleGrid();
+        renderColorGrid();
+        renderSlotTabs();
+        const sel = state[activeSlot];
+        loadPreviewModel(sel.vehicleId, colorToHex(sel.color));
+    }
+
+    function selectVehicle(id){
+        state[activeSlot].vehicleId = id;
+        saveState(state);
+        applyToGameState();
+        renderAll();
+    }
+
+    function selectColor(cssHex){
+        state[activeSlot].color = cssHex;
+        saveState(state);
+        applyToGameState();
+        renderAll();
+    }
+
+    document.addEventListener("click", function(event){
+        const vehicleCard = event.target.closest("#garageVehicleGrid [data-vehicle-id]");
+        if(vehicleCard){ selectVehicle(vehicleCard.dataset.vehicleId); return; }
+
+        const colorSwatch = event.target.closest("#garageColorGrid [data-color]");
+        if(colorSwatch){ selectColor(colorSwatch.dataset.color); return; }
+
+        const slotTab = event.target.closest("#garageSlotTabs [data-slot]");
+        if(slotTab){ activeSlot = slotTab.dataset.slot; renderAll(); return; }
+    });
+
+    const garageOverlayEl = document.getElementById("garageOverlay");
+    if(garageOverlayEl && typeof MutationObserver !== "undefined"){
+        new MutationObserver(function(){
+            if(!garageOverlayEl.classList.contains("hidden")){
+                renderAll();
+                startPreviewLoop();
+            }else{
+                stopPreviewLoop();
+            }
+        }).observe(garageOverlayEl, { attributes: true, attributeFilter: ["class"] });
+    }
+
+    window.step2GarageVehicleState = state;
+    window.renderGarageVehicleSection = renderAll;
+})();
+</script>
 
 <script id="STEP2_REVISED_BALANCE">
 (function(){
