@@ -6,6 +6,12 @@
 
 <!-- PHASE 1 — OPTIONAL 3D CAR VISUAL LAYER (ADDITIVE, FAILURE-SAFE) -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<!-- GLTFLoader build matching the pinned three.js r128 above, for loading
+     the real supercar/traffic GLB asset (assets/models/ferrari.glb). -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<!-- The ferrari.glb asset's geometry is Draco-compressed; GLTFLoader
+     needs a configured DRACOLoader to decode it. -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
 
 <script>
 const SUPABASE_URL = "https://bburdsuluucatwzgdixl.supabase.co";
@@ -8024,6 +8030,7 @@ preview();
 
     const CAR3D_BASE_WIDTH = 1.9;
     const WHEEL_ROLL_AXIS = new THREE.Vector3(0, 1, 0);
+    const WHEEL_ROLL_AXIS_GLTF = new THREE.Vector3(1, 0, 0);
     const WHEEL_ROLL_RADIUS = 0.4;
     const FLY_LIFT_HEIGHT = 1.3;
     const FLY_LIFT_EASE = 0.08;
@@ -8079,13 +8086,28 @@ preview();
     const BUILDING_COUNT_PER_SIDE = 9;
     const BUILDING_RANGE = BUILDING_COUNT_PER_SIDE * BUILDING_PERIOD;
     const BUILDING_MIN_Z = -10;
+    const FAR_SKYLINE_PERIOD = 30;
+    const FAR_SKYLINE_COUNT_PER_SIDE = 7;
+    const FAR_SKYLINE_RANGE = FAR_SKYLINE_COUNT_PER_SIDE * FAR_SKYLINE_PERIOD;
+    const FAR_SKYLINE_MIN_Z = -10;
     const LAMP_PERIOD = 16;
     const LAMP_COUNT_PER_SIDE = 10;
     const LAMP_RANGE = LAMP_COUNT_PER_SIDE * LAMP_PERIOD;
     const LAMP_MIN_Z = -8;
 
+    // NOTE: negated. The chase camera looks toward world +Z (camera at
+    // negative Z looking at positive Z), which is a "backwards" rig
+    // relative to Three.js's default -Z-forward convention. lookAt()
+    // still computes a valid camera basis for this, but the resulting
+    // local +X (screen-right) ends up pointing toward world -X — so
+    // without this negation, ArrowRight/D (which increases the 2D
+    // player.x) would visually push the car toward screen-LEFT. This is
+    // the fix for the "ArrowLeft/ArrowRight direction" requirement; only
+    // the player/traffic car mapping needs it since the environment
+    // (buildings/lamps/lane dividers) is placed directly in world space
+    // and is left/right-symmetric, so it is unaffected either way.
     function mapWorldX(cx2d){
-        return (cx2d - WORLD_ROAD_CENTER_2D) * WORLD_X_SCALE;
+        return -(cx2d - WORLD_ROAD_CENTER_2D) * WORLD_X_SCALE;
     }
 
     function mapWorldZ(cy2d){
@@ -8122,6 +8144,166 @@ preview();
     const flyPickupMaterial5 = new THREE.MeshStandardMaterial({ color: 0xa78bfa, emissive: 0xa78bfa, emissiveIntensity: 0.9, roughness: 0.25 });
     const flyPickupMaterial10 = new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x22d3ee, emissiveIntensity: 0.9, roughness: 0.25 });
 
+    // Fly-state glow, shared across every vehicle (GLB or primitive
+    // fallback) instead of allocating a per-car material for this effect.
+    const flyGlowMaterial = new THREE.MeshStandardMaterial({
+        color: 0xfff7d6,
+        emissive: 0xfff7d6,
+        emissiveIntensity: 1.3,
+        roughness: 0.4
+    });
+
+    // ================================================================
+    // REAL GLB VEHICLE ASSET (STEP: realistic 3D supercar/traffic)
+    // A single enclosed-body supercar model (assets/models/ferrari.glb,
+    // sourced from the official three.js example assets, MIT-licensed
+    // repository) is loaded once via GLTFLoader and cloned for the
+    // player car(s) and every pooled traffic vehicle, recolored per
+    // instance. If the asset fails to load (offline, blocked, etc.) each
+    // caller falls back to the existing hand-built primitive geometry
+    // (buildCar()/the box-based traffic body below) so the game never
+    // renders an empty car.
+    // ================================================================
+    const CAR_MODEL_URL = "assets/models/ferrari.glb";
+    // Measured directly from the loaded asset (see PHASE 1/2 verification):
+    // bounding box 2.26m (W) x 1.24m (H) x 4.53m (L) — already real-world
+    // scale, so no rescale is needed. Its "lights" (headlight) mesh sits
+    // at local z=-1.85 and "lights_red" (taillight) at z=+0.91, i.e. the
+    // model's native front is local -Z — exactly the same convention the
+    // rest of this file already uses for the primitive car — so no extra
+    // yaw is applied here; syncCarToPlayer()'s existing 180-degree group
+    // rotation for player cars (and no rotation for traffic) is reused
+    // unchanged. Wheels already sit at y~=0, hence the near-zero offset.
+    const CAR_MODEL_SCALE = 1.0;
+    const CAR_MODEL_YAW = 0;
+    const CAR_MODEL_Y_OFFSET = 0.005;
+
+    let carGltfTemplate = null;
+    let carGltfLoadPromise = null;
+
+    function loadCarGltfTemplate(){
+        if(carGltfTemplate) return Promise.resolve(carGltfTemplate);
+        if(carGltfLoadPromise) return carGltfLoadPromise;
+
+        carGltfLoadPromise = new Promise(function(resolve, reject){
+            if(typeof THREE.GLTFLoader !== "function"){
+                reject(new Error("GLTFLoader not available"));
+                return;
+            }
+            const loader = new THREE.GLTFLoader();
+            // ferrari.glb ships with Draco-compressed geometry; without a
+            // configured DRACOLoader, GLTFLoader throws "No DRACOLoader
+            // instance provided" and the whole asset fails to parse.
+            if(typeof THREE.DRACOLoader === "function"){
+                const dracoLoader = new THREE.DRACOLoader();
+                dracoLoader.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/gltf/");
+                loader.setDRACOLoader(dracoLoader);
+            }
+            loader.load(
+                CAR_MODEL_URL,
+                function(gltf){
+                    carGltfTemplate = gltf.scene;
+                    resolve(carGltfTemplate);
+                },
+                undefined,
+                function(err){
+                    console.warn("Supercar GLB failed to load, using primitive fallback car:", err);
+                    reject(err);
+                }
+            );
+        });
+
+        return carGltfLoadPromise;
+    }
+
+    // Clones the cached GLB template into `group`, gives the clone its
+    // own materials (so per-instance paint-color tinting doesn't affect
+    // every other car sharing the same loaded template), and detects
+    // wheel meshes by name for the existing roll-animation code. Falls
+    // back to `fallbackBuilder()` (the pre-existing primitive geometry)
+    // if the GLB is unavailable, so callers always end up with a car.
+    function attachVehicleModel(car, colorHex, fallbackBuilder){
+        loadCarGltfTemplate().then(function(template){
+            const modelRoot = template.clone(true);
+            const wheelMeshes = [];
+            let paintMaterial = null;
+            let paintIsExactMatch = false;
+
+            modelRoot.traverse(function(node){
+                if(!node.isMesh) return;
+
+                if(Array.isArray(node.material)){
+                    node.material = node.material.map(function(m){ return m.clone(); });
+                }else if(node.material){
+                    node.material = node.material.clone();
+                }
+
+                const name = (node.name || "").toLowerCase();
+                if(/wheel|tire|tyre|rim/.test(name)){
+                    wheelMeshes.push(node);
+                }
+
+                const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+                // Match only on actual paint/body part names. "red"/"main"
+                // were previously included here but false-matched unrelated
+                // parts like "lights_red" (the taillight glass) before the
+                // real "body" mesh was ever visited, silently tinting the
+                // wrong (invisible-effect) material instead of the paint.
+                if(!paintIsExactMatch && mat && mat.color && /^(body|paint|carpaint)$/.test(name)){
+                    // Exact-name match always wins over an earlier
+                    // substring-only candidate found via the loose test below.
+                    paintMaterial = mat;
+                    paintIsExactMatch = true;
+                }else if(!paintMaterial && mat && mat.color && /body|paint|carpaint/.test(name)){
+                    paintMaterial = mat;
+                }
+            });
+
+            // No name matched a body-paint mesh on this asset — tint the
+            // single largest mesh's material instead, as a best-effort.
+            if(!paintMaterial){
+                let largest = null, largestVolume = -1;
+                modelRoot.traverse(function(node){
+                    if(!node.isMesh || !node.geometry) return;
+                    if(!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+                    const bb = node.geometry.boundingBox;
+                    const size = bb ? (bb.max.x - bb.min.x) * (bb.max.y - bb.min.y) * (bb.max.z - bb.min.z) : 0;
+                    if(size > largestVolume){
+                        largestVolume = size;
+                        largest = node;
+                    }
+                });
+                if(largest){
+                    const mat = Array.isArray(largest.material) ? largest.material[0] : largest.material;
+                    if(mat && mat.color) paintMaterial = mat;
+                }
+            }
+
+            if(paintMaterial && colorHex !== null && typeof colorHex !== "undefined"){
+                paintMaterial.color.set(colorHex);
+            }
+
+            modelRoot.rotation.y = CAR_MODEL_YAW;
+            modelRoot.scale.setScalar(CAR_MODEL_SCALE);
+            modelRoot.position.y = CAR_MODEL_Y_OFFSET;
+
+            car.group.add(modelRoot);
+            car.modelRoot = modelRoot;
+            car.wheelSpinMeshes = wheelMeshes;
+            car.bodyMaterial = paintMaterial || car.bodyMaterial;
+            car.usingGltf = true;
+        }).catch(function(){
+            // car.flyGlowMeshes is already populated by the caller before
+            // attachVehicleModel() runs (independent of GLB vs. primitive
+            // body), so it is intentionally left alone here.
+            const fallback = fallbackBuilder();
+            car.group.add(fallback.group);
+            car.wheelSpinMeshes = fallback.wheelSpinMeshes || [];
+            car.bodyMaterial = fallback.bodyMaterial || car.bodyMaterial;
+            car.usingGltf = false;
+        });
+    }
+
     // Pools mapping a live 2D gameplay object (used directly as a Map
     // key) to its pooled 3D representation, so meshes are created once
     // per spawned entity and disposed once it leaves the 2D arrays —
@@ -8140,6 +8322,7 @@ preview();
     let laneDashesRight = [];
     let buildingSlots = [];
     let lampSlots = [];
+    let farSkylineSlots = [];
 
     function buildCar(model){
         model = model || CAR_MODELS.default;
@@ -8532,21 +8715,7 @@ preview();
     // exact same enclosed-supercar geometry via buildCar(); this is a
     // thin, explicitly-named wrapper around it so the player car and any
     // future variant selection has one clear, reusable construction call.
-    function buildSupercar(color, variant){
-        const model = {
-            baseWidth: CAR3D_BASE_WIDTH,
-            wheelRadius: WHEEL_ROLL_RADIUS,
-            defaultColor: (typeof color !== "undefined" && color !== null) ? color : CAR_MODELS.default.defaultColor
-        };
-        return buildCar(model);
-    }
-
-    // Lightweight 3D traffic vehicle for the `enemies[]` gameplay array.
-    // Deliberately simpler than the player supercar (fewer primitives,
-    // shared wheel/glass/light geometries+materials) since several of
-    // these can exist on screen at once; still a real enclosed 3D body
-    // with wheels and headlights/taillights, not a 2D sprite.
-    function buildTrafficCar(colorHex){
+    function buildPrimitiveTrafficCar(colorHex){
         const group = new THREE.Group();
         const bodyMaterial = new THREE.MeshStandardMaterial({
             color: colorHex || 0x2563eb,
@@ -8586,12 +8755,80 @@ preview();
             group.add(taillight);
         });
 
-        // Traffic drives toward the player (opposite direction from the
-        // player cars), so its local -Z "front"/headlights should point
-        // toward world -Z (back at the camera) — i.e. no extra rotation,
-        // matching the existing 2D drawEnemies() "faces the player" intent.
+        return { group: group, bodyMaterial: bodyMaterial, wheelSpinMeshes: [] };
+    }
 
-        return { group: group, bodyMaterial: bodyMaterial };
+    // Builds the fly-state glow "wings" shared by both the real GLB
+    // vehicle and the primitive fallback — independent of which body is
+    // actually attached, since the GLB asset has no such feature built in.
+    function buildFlyGlowWings(group, halfWidth){
+        const flyGlowMeshes = [];
+        [-1, 1].forEach(function(side){
+            const wing = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.75), flyGlowMaterial);
+            wing.position.set(side * (halfWidth * 0.58), -0.08, 0.25);
+            wing.rotation.z = side * 0.32;
+            wing.visible = false;
+            group.add(wing);
+            flyGlowMeshes.push(wing);
+        });
+        return flyGlowMeshes;
+    }
+
+    // Real GLB supercar (see "REAL GLB VEHICLE ASSET" above) used for both
+    // the player car(s). Falls back to the existing hand-built primitive
+    // buildCar() if the asset cannot be loaded.
+    function buildSupercar(color, variant){
+        const resolvedColor = (typeof color !== "undefined" && color !== null) ? color : CAR_MODELS.default.defaultColor;
+        const group = new THREE.Group();
+        const flyGlowMeshes = buildFlyGlowWings(group, CAR3D_BASE_WIDTH);
+
+        const car = {
+            group: group,
+            bodyMaterial: null,
+            wheelSpinMeshes: [],
+            flyGlowMeshes: flyGlowMeshes,
+            liftY: 0,
+            lastCarZ: null,
+            lastColor: resolvedColor,
+            usingGltf: false
+        };
+
+        attachVehicleModel(car, resolvedColor, function(){
+            return buildCar({
+                baseWidth: CAR3D_BASE_WIDTH,
+                wheelRadius: WHEEL_ROLL_RADIUS,
+                defaultColor: resolvedColor
+            });
+        });
+
+        return car;
+    }
+
+    // Real GLB traffic vehicle for the `enemies[]` gameplay array — same
+    // underlying asset as the player supercar, recolored per instance
+    // (see buildTrafficCar doc above for why a single vetted asset is
+    // reused rather than several distinct files). Falls back to a
+    // simpler hand-built primitive box-car if the GLB is unavailable.
+    function buildTrafficCar(colorHex){
+        const group = new THREE.Group();
+        const flyGlowMeshes = buildFlyGlowWings(group, CAR3D_BASE_WIDTH);
+
+        const car = {
+            group: group,
+            bodyMaterial: null,
+            wheelSpinMeshes: [],
+            flyGlowMeshes: flyGlowMeshes,
+            liftY: 0,
+            lastCarZ: null,
+            lastColor: colorHex,
+            usingGltf: false
+        };
+
+        attachVehicleModel(car, colorHex, function(){
+            return buildPrimitiveTrafficCar(colorHex);
+        });
+
+        return car;
     }
 
     function buildObstacleMesh(type){
@@ -8752,21 +8989,37 @@ preview();
             roughness: 0.4
         });
 
+        const billboardMaterials = [
+            new THREE.MeshStandardMaterial({ color: 0xff2d95, emissive: 0xff2d95, emissiveIntensity: 1.2, roughness: 0.4 }),
+            new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x22d3ee, emissiveIntensity: 1.2, roughness: 0.4 }),
+            new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xfacc15, emissiveIntensity: 1.2, roughness: 0.4 })
+        ];
+        const storefrontMaterial = new THREE.MeshStandardMaterial({
+            color: 0xfff4d6,
+            emissive: 0xfff4d6,
+            emissiveIntensity: 0.7,
+            roughness: 0.5
+        });
+        const farSkylineMaterial = new THREE.MeshStandardMaterial({ color: 0x060a14, roughness: 1 });
+
         buildingSlots = [];
         [-1, 1].forEach(function(side){
             for(let i = 0; i < BUILDING_COUNT_PER_SIDE; i++){
                 const seed = i + (side > 0 ? 100 : 0);
-                const bw = 3 + (seed % 3) * 1.3;
-                const bh = 6 + (seed % 5) * 2.6;
-                const bd = 4;
-                const bx = side * (WORLD_ROAD_HALF_WIDTH + 7 + (seed % 3) * 1.5);
+                // Closer to the road and much taller/varied than the first
+                // pass — a real street-canyon presence on both sides
+                // instead of a distant, sparse skyline.
+                const bw = 3.4 + (seed % 4) * 1.4;
+                const bh = 9 + (seed % 6) * 4.2;
+                const bd = 4.2 + (seed % 2) * 1.5;
+                const bx = side * (WORLD_ROAD_HALF_WIDTH + 4 + (seed % 3) * 1.3);
 
                 const building = new THREE.Mesh(
                     new THREE.BoxGeometry(bw, bh, bd),
                     new THREE.MeshStandardMaterial({
                         color: buildingColors[seed % buildingColors.length],
-                        roughness: 0.85,
-                        metalness: 0.1
+                        roughness: 0.8,
+                        metalness: 0.15
                     })
                 );
                 building.position.set(bx, bh / 2, 0);
@@ -8776,19 +9029,57 @@ preview();
                 // positions relative to its own center) so they scroll
                 // together with it when layoutEnvironment() repositions
                 // the building each frame, instead of detaching from it.
-                for(let w = 0; w < 4; w++){
+                const floors = Math.max(4, Math.floor(bh / 2.2));
+                for(let w = 0; w < floors; w++){
                     if((seed + w) % 3 === 0) continue;
-                    const win = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.05), windowMaterial);
+                    const win = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.55, 0.05), windowMaterial);
                     win.position.set(
                         (side > 0 ? -bw / 2 - 0.03 : bw / 2 + 0.03),
-                        (1.5 + w * (bh / 5)) - bh / 2,
-                        (w % 2 === 0 ? -1 : 1)
+                        (1.4 + w * 2.1) - bh / 2,
+                        (w % 2 === 0 ? -bd / 4 : bd / 4)
                     );
                     win.rotation.y = Math.PI / 2;
                     building.add(win);
                 }
 
+                // Bright ground-floor storefront strip for street-level glow.
+                const storefront = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, bd * 0.7), storefrontMaterial);
+                storefront.position.set((side > 0 ? -bw / 2 - 0.03 : bw / 2 + 0.03), 0.45 - bh / 2, 0);
+                storefront.rotation.y = Math.PI / 2;
+                building.add(storefront);
+
+                // A neon billboard on roughly every third building.
+                if(seed % 3 === 0){
+                    const board = new THREE.Mesh(
+                        new THREE.BoxGeometry(0.08, 1.6, 2.4),
+                        billboardMaterials[seed % billboardMaterials.length]
+                    );
+                    board.position.set((side > 0 ? -bw / 2 - 0.5 : bw / 2 + 0.5), bh * 0.28, 0);
+                    building.add(board);
+                }
+
                 buildingSlots.push({ mesh: building, side: side, baseIndex: i });
+            }
+        });
+
+        // Distant background skyline: a second, sparser, unlit row set
+        // further back for real depth/parallax behind the near buildings,
+        // instead of the city stopping abruptly at one row.
+        farSkylineSlots = [];
+        [-1, 1].forEach(function(side){
+            for(let i = 0; i < FAR_SKYLINE_COUNT_PER_SIDE; i++){
+                const seed = i + (side > 0 ? 50 : 0);
+                const bw = 4 + (seed % 3) * 2;
+                const bh = 14 + (seed % 5) * 6;
+                const bx = side * (WORLD_ROAD_HALF_WIDTH + 16 + (seed % 4) * 3);
+
+                const building = new THREE.Mesh(
+                    new THREE.BoxGeometry(bw, bh, bw),
+                    farSkylineMaterial
+                );
+                building.position.set(bx, bh / 2, 0);
+                group.add(building);
+                farSkylineSlots.push({ mesh: building, side: side, baseIndex: i });
             }
         });
 
@@ -8827,6 +9118,15 @@ preview();
             let z = (slot.baseIndex * BUILDING_PERIOD - bOffset) % BUILDING_RANGE;
             if(z < 0) z += BUILDING_RANGE;
             slot.mesh.position.z = BUILDING_MIN_Z + z;
+        });
+
+        let fOffset = scrollWorld % FAR_SKYLINE_RANGE;
+        if(fOffset < 0) fOffset += FAR_SKYLINE_RANGE;
+
+        farSkylineSlots.forEach(function(slot){
+            let z = (slot.baseIndex * FAR_SKYLINE_PERIOD - fOffset) % FAR_SKYLINE_RANGE;
+            if(z < 0) z += FAR_SKYLINE_RANGE;
+            slot.mesh.position.z = FAR_SKYLINE_MIN_Z + z;
         });
 
         let lOffset = scrollWorld % LAMP_RANGE;
@@ -8893,6 +9193,7 @@ preview();
         laneDashesRight = [];
         buildingSlots = [];
         lampSlots = [];
+        farSkylineSlots = [];
 
         const canvasEl = document.getElementById("carLayer3D");
         if(canvasEl) canvasEl.style.display = "none";
@@ -8912,7 +9213,7 @@ preview();
             scene.remove(current.group);
         }
 
-        const rebuilt = buildCar(resolvedModel);
+        const rebuilt = buildSupercar(resolvedModel.defaultColor);
 
         if(scene) scene.add(rebuilt.group);
 
@@ -9074,8 +9375,15 @@ preview();
             const rollDelta = worldZ - car.lastCarZ;
             if(rollDelta !== 0){
                 const spinAngle = -rollDelta / WHEEL_ROLL_RADIUS;
+                // The GLB wheel meshes' own hub/axle axis is unverified
+                // (unlike the primitive wheels, which are authored to spin
+                // around the shared vertical WHEEL_ROLL_AXIS by
+                // construction) — use the conventional lateral axle axis
+                // for GLB wheels instead of guessing with the primitive's
+                // axis, which would visibly spin them the wrong way.
+                const axis = car.usingGltf ? WHEEL_ROLL_AXIS_GLTF : WHEEL_ROLL_AXIS;
                 car.wheelSpinMeshes.forEach(function(m){
-                    m.rotateOnAxis(WHEEL_ROLL_AXIS, spinAngle);
+                    m.rotateOnAxis(axis, spinAngle);
                 });
             }
         }
