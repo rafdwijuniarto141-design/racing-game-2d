@@ -371,6 +371,37 @@ canvas{
         rgba(255,255,255,.15);
 }
 
+/* Game mode selection (1 PLAYER / 2 PLAYER) */
+.mode-grid{
+    display:flex;
+    gap:10px;
+    margin:12px 0 18px;
+}
+
+.mode-choice{
+    flex:1;
+    padding:14px 8px;
+    border:2px solid rgba(255,255,255,.15);
+    border-radius:11px;
+    background:#0f1b2e;
+    color:#cbd5e1;
+    font-weight:bold;
+    cursor:pointer;
+    transition:.2s;
+}
+
+.mode-choice:hover{
+    transform:translateY(-2px);
+    border-color:rgba(255,255,255,.35);
+}
+
+.mode-choice.active{
+    border-color:#facc15;
+    background:#1b344e;
+    color:#fff;
+    box-shadow:0 0 0 3px rgba(250,204,21,.2);
+}
+
 
 /* =========================================================
    BUTTON
@@ -902,6 +933,30 @@ id="menuOverlay">
     dan mulai balapan.
 </p>
 
+<h3 id="modeSelectionHeading">
+    🎮 MODE PERMAINAN
+</h3>
+
+<div class="mode-grid" id="modeGrid">
+
+<button
+class="mode-choice"
+data-mode="1P"
+id="mode1PButton">
+👤 1 PLAYER<br>
+<small>Lawan AI</small>
+</button>
+
+<button
+class="mode-choice"
+data-mode="2P"
+id="mode2PButton">
+👥 2 PLAYER<br>
+<small>P1 &amp; P2</small>
+</button>
+
+</div>
+
 <input
 id="playerName"
 maxlength="16"
@@ -958,7 +1013,7 @@ style="background:#f97316">
 id="startButton"
 class="btn primary">
 
-🚀 MULAI GAME
+🚀 START RACE
 
 </button>
 
@@ -1953,6 +2008,7 @@ let speedBoostTime = 0;
 let invincible = 0;
 
 let selectedColor = "#ef4444";
+let gameMode = null;
 
 let playerName = "Player";
 
@@ -2868,6 +2924,62 @@ time
 
 
 /* =========================================================
+   AI OPPONENT (1 PLAYER MODE)
+========================================================= */
+
+function updateAI(dt){
+
+    keys2.up = true;
+    keys2.down = false;
+    keys2.left = false;
+    keys2.right = false;
+
+    if(player2.eliminated) return;
+
+    const lookahead = 220;
+    const hazards = enemies.concat(obstacles);
+
+    let nearestHazard = null;
+    let nearestDist = Infinity;
+
+    for(let i = 0; i < hazards.length; i++){
+
+        const h = hazards[i];
+        const dy = player2.y - (h.y + h.height);
+
+        if(dy < -20 || dy > lookahead) continue;
+
+        const hazardLeft = h.x - 20;
+        const hazardRight = h.x + h.width + 20;
+        const playerLeft = player2.x;
+        const playerRight = player2.x + player2.width;
+
+        if(playerRight < hazardLeft || playerLeft > hazardRight) continue;
+
+        if(dy < nearestDist){
+            nearestDist = dy;
+            nearestHazard = h;
+        }
+
+    }
+
+    if(nearestHazard){
+
+        const hazardCenter = nearestHazard.x + nearestHazard.width / 2;
+        const playerCenter = player2.x + player2.width / 2;
+
+        if(hazardCenter <= playerCenter){
+            keys2.right = true;
+        } else {
+            keys2.left = true;
+        }
+
+    }
+
+}
+
+
+/* =========================================================
    UPDATE
 ========================================================= */
 
@@ -2878,6 +2990,11 @@ dt
     updateLevel();
 
     updatePlayer(dt, player, keys);
+
+    if(gameMode === "1P"){
+        updateAI(dt);
+    }
+
     updatePlayer(dt, player2, keys2);
 
     updateSpawn(dt);
@@ -7416,6 +7533,65 @@ document
 
 
 /* =========================================================
+   GAME MODE SELECTION
+========================================================= */
+
+document
+.querySelectorAll(
+    ".mode-choice"
+)
+.forEach(
+
+    button => {
+
+        button.addEventListener(
+
+            "click",
+
+            function(){
+
+                document
+                .querySelectorAll(
+                    ".mode-choice"
+                )
+                .forEach(
+
+                    item => {
+
+                        item
+                        .classList
+                        .remove(
+                            "active"
+                        );
+
+                    }
+
+                );
+
+
+                button
+                .classList
+                .add(
+                    "active"
+                );
+
+
+                gameMode =
+                button
+                .dataset
+                .mode;
+
+            }
+
+        );
+
+    }
+
+);
+
+
+
+/* =========================================================
    GARAGE EVENTS — STEP 2 ADDITIVE
 ========================================================= */
 if(garageButton) garageButton.addEventListener("click", function(){
@@ -7444,7 +7620,13 @@ if(garageUpgradeList) garageUpgradeList.addEventListener("click", function(event
 startButton
 .addEventListener(
     "click",
-    startGame
+    function(){
+        if(!gameMode){
+            alert("Pilih mode permainan dulu: 1 PLAYER atau 2 PLAYER.");
+            return;
+        }
+        startGame();
+    }
 );
 
 
@@ -7742,54 +7924,78 @@ preview();
 
         // Very low, ground-hugging floor pan / underbody spine
         const floorPan = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.78, 0.09, 4.05),
+            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.08, 4.1),
             lowerBodyMaterial
         );
-        floorPan.position.set(0, 0.085, 0.05);
+        floorPan.position.set(0, 0.07, 0.05);
         group.add(floorPan);
 
         // Side sills: body volume filling the flanks between the wheels
         [-1, 1].forEach(function(side){
             const sill = new THREE.Mesh(
-                new THREE.BoxGeometry(0.10, 0.14, 2.6),
+                new THREE.BoxGeometry(0.11, 0.13, 2.6),
                 lowerBodyMaterial
             );
-            sill.position.set(side * (model.baseWidth * 0.49), 0.15, -0.05);
+            sill.position.set(side * (model.baseWidth * 0.50), 0.13, -0.05);
             group.add(sill);
+
+            // Supercar side air intake pod, just ahead of the rear wheel arch
+            const intake = new THREE.Mesh(
+                new THREE.BoxGeometry(0.13, 0.16, 0.55),
+                lowerBodyMaterial
+            );
+            intake.position.set(side * (model.baseWidth * 0.52), 0.17, 0.75);
+            group.add(intake);
         });
 
         // Mid body / door section, narrower than the rear haunches
         const midBody = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.78, 0.20, 1.25),
+            new THREE.BoxGeometry(model.baseWidth * 0.76, 0.18, 1.25),
             bodyMaterial
         );
-        midBody.position.set(0, 0.195, -0.35);
+        midBody.position.set(0, 0.17, -0.35);
         group.add(midBody);
+
+        // Raised hood sculpt line running from the windshield base to the nose
+        const hoodRidge = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.12, 0.03, 1.0),
+            bodyMaterial
+        );
+        hoodRidge.position.set(0, 0.27, -1.1);
+        group.add(hoodRidge);
 
         // Wide rear haunches / shoulders (full-width performance stance)
         const rearBody = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth, 0.24, 1.7),
+            new THREE.BoxGeometry(model.baseWidth * 1.04, 0.22, 1.7),
             bodyMaterial
         );
-        rearBody.position.set(0, 0.21, 1.2);
+        rearBody.position.set(0, 0.19, 1.2);
         group.add(rearBody);
 
         // Long, low, pointed nose wedge: a 4-sided cylinder frustum tapering
         // narrow-and-low toward the front tip (tapers downward and inward)
         const nose = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.13, 0.4, 1.85, 4, 1, false, Math.PI / 4),
+            new THREE.CylinderGeometry(0.11, 0.4, 1.85, 4, 1, false, Math.PI / 4),
             bodyMaterial
         );
         nose.rotation.x = -Math.PI / 2;
-        nose.position.set(0, 0.175, -1.75);
+        nose.position.set(0, 0.15, -1.75);
         group.add(nose);
 
-        // Aggressive low front splitter
+        // Front splitter lip: thin flat blade protruding beyond the bumper
+        const splitterLip = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.74, 0.03, 0.12),
+            lowerBodyMaterial
+        );
+        splitterLip.position.set(0, 0.04, -2.8);
+        group.add(splitterLip);
+
+        // Aggressive low front bumper/splitter body
         const bumper = new THREE.Mesh(
             new THREE.BoxGeometry(model.baseWidth * 0.68, 0.06, 0.16),
             lowerBodyMaterial
         );
-        bumper.position.set(0, 0.075, -2.62);
+        bumper.position.set(0, 0.06, -2.62);
         group.add(bumper);
 
         // Compact, low cockpit — clearly smaller than the body, biased rearward.
@@ -7797,19 +8003,29 @@ preview();
         // tail) so the roof itself slopes into a fastback line, rather than
         // sitting under separate glass panes as a flat rectangular box.
         const cabin = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.34, 0.18, 1.05, 4, 1, false, Math.PI / 4),
+            new THREE.CylinderGeometry(0.31, 0.16, 0.95, 4, 1, false, Math.PI / 4),
             cabinMaterial
         );
         cabin.rotation.x = -Math.PI / 2;
-        cabin.position.set(0, 0.3, 0.4);
+        cabin.position.set(0, 0.27, 0.4);
         group.add(cabin);
+
+        // Small side mirrors on the cabin flanks
+        [-1, 1].forEach(function(side){
+            const mirror = new THREE.Mesh(
+                new THREE.BoxGeometry(0.08, 0.05, 0.09),
+                cabinMaterial
+            );
+            mirror.position.set(side * (model.baseWidth * 0.42), 0.33, -0.15);
+            group.add(mirror);
+        });
 
         // Steeply sloped windshield
         const windshield = new THREE.Mesh(
             new THREE.BoxGeometry(model.baseWidth * 0.4, 0.04, 0.6),
             glassMaterial
         );
-        windshield.position.set(0, 0.4, -0.2);
+        windshield.position.set(0, 0.36, -0.2);
         windshield.rotation.x = -0.62;
         group.add(windshield);
 
@@ -7818,7 +8034,7 @@ preview();
             new THREE.BoxGeometry(model.baseWidth * 0.4, 0.04, 0.55),
             glassMaterial
         );
-        rearWindow.position.set(0, 0.4, 0.95);
+        rearWindow.position.set(0, 0.36, 0.95);
         rearWindow.rotation.x = 0.58;
         group.add(rearWindow);
 
@@ -7827,30 +8043,51 @@ preview();
             new THREE.BoxGeometry(model.baseWidth * 0.9, 0.06, 0.5),
             bodyMaterial
         );
-        rearDeck.position.set(0, 0.34, 1.75);
+        rearDeck.position.set(0, 0.31, 1.75);
         group.add(rearDeck);
 
-        // Rear spoiler wing on two struts, clear of the rear deck
+        // Rear diffuser: angled fin blades fanning out under the rear bumper
+        const diffuserBase = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.76, 0.03, 0.3),
+            lowerBodyMaterial
+        );
+        diffuserBase.position.set(0, 0.035, 2.55);
+        group.add(diffuserBase);
+
+        [-1, 0, 1].forEach(function(i){
+            const fin = new THREE.Mesh(
+                new THREE.BoxGeometry(0.05, 0.06, 0.24),
+                spoilerMaterial
+            );
+            fin.position.set(i * model.baseWidth * 0.2, 0.055, 2.58);
+            fin.rotation.y = i * 0.16;
+            group.add(fin);
+        });
+
+        // Rear spoiler wing on two struts, mounted high for aggressive aero
         const spoiler = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.8, 0.04, 0.26),
+            new THREE.BoxGeometry(model.baseWidth * 0.86, 0.04, 0.28),
             spoilerMaterial
         );
-        spoiler.position.set(0, 0.58, 2.05);
+        spoiler.position.set(0, 0.64, 2.05);
         group.add(spoiler);
 
         [-1, 1].forEach(function(side){
             const strut = new THREE.Mesh(
-                new THREE.BoxGeometry(0.05, 0.2, 0.05),
+                new THREE.BoxGeometry(0.05, 0.26, 0.05),
                 spoilerMaterial
             );
-            strut.position.set(side * (model.baseWidth * 0.32), 0.47, 2.05);
+            strut.position.set(side * (model.baseWidth * 0.32), 0.5, 2.05);
             group.add(strut);
         });
 
         // Wheels tucked inside the body silhouette: narrower front axle,
-        // wider rear axle, each paired with a metallic rim on the outer face
-        const wheelGeometry = new THREE.CylinderGeometry(model.wheelRadius, model.wheelRadius, 0.24, 14);
-        const rimGeometry = new THREE.CylinderGeometry(0.22, 0.22, 0.05, 10);
+        // wider rear axle, each paired with a metallic rim on the outer face.
+        // Wheel width (0.30) is wider than the previous generation for a
+        // supercar wide-arch look; the roll radius itself is unchanged so
+        // wheel-roll animation/ground contact stay exactly as before.
+        const wheelGeometry = new THREE.CylinderGeometry(model.wheelRadius, model.wheelRadius, 0.30, 14);
+        const rimGeometry = new THREE.CylinderGeometry(0.22, 0.22, 0.06, 10);
         [
             [-1, -1.35, 0.24],
             [1, -1.35, 0.24],
@@ -7895,29 +8132,30 @@ preview();
             rim.add(hub);
 
             // Fender flare: blends the wheel arch into the body volume so
-            // the wheel reads as integrated rather than bolted to a box
+            // the wheel reads as integrated rather than bolted to a box.
+            // Widened slightly to match the wider (0.30) wheel geometry.
             const fender = new THREE.Mesh(
-                new THREE.BoxGeometry(0.18, 0.1, 0.52),
+                new THREE.BoxGeometry(0.22, 0.1, 0.55),
                 bodyMaterial
             );
-            fender.position.set(pos[0] * (trackHalf - 0.05), 0.3, pos[1]);
+            fender.position.set(pos[0] * (trackHalf - 0.05), 0.28, pos[1]);
             group.add(fender);
         });
 
-        // Narrow, aggressive angular headlights near the low nose tip
-        const headlightGeometry = new THREE.BoxGeometry(0.3, 0.07, 0.06);
+        // Narrow, aggressive angular wrap-around headlights near the nose tip
+        const headlightGeometry = new THREE.BoxGeometry(0.34, 0.08, 0.07);
         [-1, 1].forEach(function(side){
             const headlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
-            headlight.position.set(side * (model.baseWidth * 0.24), 0.2, -2.55);
-            headlight.rotation.z = side * 0.4;
+            headlight.position.set(side * (model.baseWidth * 0.24), 0.18, -2.58);
+            headlight.rotation.z = side * 0.5;
             group.add(headlight);
         });
 
         // Wide rear taillight bar elements
-        const taillightGeometry = new THREE.BoxGeometry(0.42, 0.08, 0.05);
+        const taillightGeometry = new THREE.BoxGeometry(0.46, 0.09, 0.05);
         [-1, 1].forEach(function(side){
             const taillight = new THREE.Mesh(taillightGeometry, taillightMaterial);
-            taillight.position.set(side * (model.baseWidth * 0.36), 0.36, 2.2);
+            taillight.position.set(side * (model.baseWidth * 0.36), 0.33, 2.25);
             group.add(taillight);
         });
 
