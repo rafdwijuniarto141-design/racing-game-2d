@@ -8116,41 +8116,65 @@ preview();
             roughness: 0.35
         });
 
+        // ============================================================
+        // MAIN BODY SHELL
+        // A small number of large, deliberately overlapping panels so the
+        // top-down/rear-3-quarter silhouette reads as one continuous,
+        // enclosed supercar body from nose to tail, instead of several
+        // disconnected boxes that leave gaps beside the wheels (the
+        // open-wheel/formula-car look this model previously had). Every
+        // panel below is sized to overlap its neighbor in Z by a generous
+        // margin so there is no seam gap regardless of camera angle.
+        // ============================================================
+
         // Very low, ground-hugging floor pan / underbody spine
         const floorPan = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.08, 4.1),
+            new THREE.BoxGeometry(model.baseWidth * 0.78, 0.08, 4.3),
             lowerBodyMaterial
         );
         floorPan.position.set(0, 0.07, 0.05);
         group.add(floorPan);
 
-        // Side sills: body volume filling the flanks between the wheels
-        [-1, 1].forEach(function(side){
-            const sill = new THREE.Mesh(
-                new THREE.BoxGeometry(0.11, 0.13, 2.6),
-                lowerBodyMaterial
-            );
-            sill.position.set(side * (model.baseWidth * 0.50), 0.13, -0.05);
-            group.add(sill);
+        // Front body shell: wide from the very first frame — replaces the
+        // old narrow tapering nose cylinder. Already wide enough at the
+        // front wheel line that only a small fender flare (added with the
+        // wheels below) is needed to fully enclose the wheel.
+        const bodyShellFront = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.82, 0.16, 1.9),
+            bodyMaterial
+        );
+        bodyShellFront.position.set(0, 0.14, -1.6);
+        group.add(bodyShellFront);
 
-            // Supercar side air intake pod, just ahead of the rear wheel arch
+        // Front shoulder bulge: extra width directly over the front wheel
+        // so the front reads as flared shoulders rather than a flat taper.
+        const frontShoulder = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.90, 0.14, 0.75),
+            bodyMaterial
+        );
+        frontShoulder.position.set(0, 0.16, -1.5);
+        group.add(frontShoulder);
+
+        // Mid body / sill: bridges the front shell to the rear shell under
+        // the cabin doors, keeping the silhouette continuous.
+        const midBodyBase = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.16, 1.3),
+            bodyMaterial
+        );
+        midBodyBase.position.set(0, 0.15, -0.15);
+        group.add(midBodyBase);
+
+        // Supercar side air intake pods, just ahead of the rear wheel arch
+        [-1, 1].forEach(function(side){
             const intake = new THREE.Mesh(
                 new THREE.BoxGeometry(0.13, 0.16, 0.55),
                 lowerBodyMaterial
             );
-            intake.position.set(side * (model.baseWidth * 0.52), 0.17, 0.75);
+            intake.position.set(side * (model.baseWidth * 0.50), 0.19, 0.7);
             group.add(intake);
         });
 
-        // Mid body / door section, narrower than the rear haunches
-        const midBody = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.76, 0.18, 1.25),
-            bodyMaterial
-        );
-        midBody.position.set(0, 0.17, -0.35);
-        group.add(midBody);
-
-        // Raised hood sculpt line running from the windshield base to the nose
+        // Raised hood sculpt line running from the windshield base forward
         const hoodRidge = new THREE.Mesh(
             new THREE.BoxGeometry(model.baseWidth * 0.12, 0.03, 1.0),
             bodyMaterial
@@ -8158,37 +8182,33 @@ preview();
         hoodRidge.position.set(0, 0.27, -1.1);
         group.add(hoodRidge);
 
-        // Wide rear haunches / shoulders (full-width performance stance)
-        const rearBody = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 1.04, 0.22, 1.7),
+        // Rear body shell: wide and continuous from the cabin back to the
+        // rear bumper/diffuser line.
+        const bodyShellRear = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.92, 0.20, 2.0),
             bodyMaterial
         );
-        rearBody.position.set(0, 0.19, 1.2);
-        group.add(rearBody);
+        bodyShellRear.position.set(0, 0.17, 1.3);
+        group.add(bodyShellRear);
 
-        // Wide, low front nose wedge: a 4-sided cylinder frustum, shortened
-        // and widened at the tip (vs. the previous generation) so the front
-        // reads as a wide supercar fascia rather than a narrow open-wheel
-        // point — the true full-width coverage at the wheel line comes from
-        // the frontFascia bridge box added below.
-        const nose = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.32, 0.48, 1.5, 4, 1, false, Math.PI / 4),
+        // Rear haunch bulge: extra width directly over the rear wheel for
+        // a wide, muscular rear-haunch stance.
+        const rearHaunch = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 1.02, 0.22, 1.0),
             bodyMaterial
         );
-        nose.rotation.x = -Math.PI / 2;
-        nose.position.set(0, 0.15, -1.85);
-        group.add(nose);
+        rearHaunch.position.set(0, 0.19, 1.4);
+        group.add(rearHaunch);
 
-        // Front fascia bridge: a full-width low body section spanning the
-        // front wheel line so the wheels sit visually inside continuous
-        // bodywork instead of poking out past a narrow nose (the open-wheel
-        // look this shape previously had).
-        const frontFascia = new THREE.Mesh(
-            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.14, 0.4),
+        // Low front nose cap: a short, wide, shallow wedge closing the
+        // very front tip — low and wide rather than a narrow open-wheel
+        // point.
+        const noseCap = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.62, 0.12, 0.55),
             bodyMaterial
         );
-        frontFascia.position.set(0, 0.12, -1.35);
-        group.add(frontFascia);
+        noseCap.position.set(0, 0.12, -2.5);
+        group.add(noseCap);
 
         // Front splitter lip: thin flat blade protruding beyond the bumper
         const splitterLip = new THREE.Mesh(
@@ -8205,6 +8225,15 @@ preview();
         );
         bumper.position.set(0, 0.06, -2.62);
         group.add(bumper);
+
+        // Rear bumper/valance: bridges the rear haunch shell to the
+        // diffuser so the tail stays enclosed all the way back.
+        const rearBumperValance = new THREE.Mesh(
+            new THREE.BoxGeometry(model.baseWidth * 0.80, 0.10, 0.4),
+            lowerBodyMaterial
+        );
+        rearBumperValance.position.set(0, 0.10, 2.35);
+        group.add(rearBumperValance);
 
         // Compact, low cockpit — clearly smaller than the body, biased rearward.
         // Built as a tapered frustum (tall at the windshield base, low at the
@@ -8339,17 +8368,20 @@ preview();
             hub.position.set(0, hubOutwardY, 0);
             rim.add(hub);
 
-            // Fender flare: blends the wheel arch into the body volume so
-            // the wheel reads as integrated rather than bolted to a box.
-            // Front fenders are widened further to meet the frontFascia
-            // bridge above and fully enclose the front wheels; rear
-            // fenders stay closer to the original width.
+            // Fender arch: covers the remaining sliver between the wide
+            // body shell's outer edge and the outer edge of the wheel so
+            // the wheel reads as fully enclosed by bodywork instead of
+            // exposed beside it. Positioned/sized independently per axle
+            // since the front and rear body shells above have different
+            // widths (frontShoulder vs. rearHaunch).
             const isFrontWheel = pos[1] < 0;
+            const fenderX = isFrontWheel ? model.baseWidth * 0.5 : model.baseWidth * 0.568;
+            const fenderW = isFrontWheel ? 0.32 : 0.30;
             const fender = new THREE.Mesh(
-                new THREE.BoxGeometry(isFrontWheel ? 0.36 : 0.26, 0.1, 0.6),
+                new THREE.BoxGeometry(fenderW, 0.12, 0.85),
                 bodyMaterial
             );
-            fender.position.set(pos[0] * (trackHalf - 0.05), 0.28, pos[1]);
+            fender.position.set(pos[0] * fenderX, 0.27, pos[1]);
             group.add(fender);
         });
 
