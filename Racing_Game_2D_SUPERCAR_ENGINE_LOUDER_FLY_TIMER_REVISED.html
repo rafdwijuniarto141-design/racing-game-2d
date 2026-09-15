@@ -2718,6 +2718,24 @@ async function updateLeaderboard(){
 function startGame(){
     leaderboardSubmittedThisSession = false;
 
+    // Control fix: a race must never start with stale key state or with
+    // keyboard focus still sitting in the player-name text field — while
+    // focused, STEP2_NAME_INPUT_STOP_GAME_KEYS stops W/A/S/Arrow keys from
+    // ever reaching the window-level control handlers below.
+    keys.up = false;
+    keys.down = false;
+    keys.left = false;
+    keys.right = false;
+
+    keys2.up = false;
+    keys2.down = false;
+    keys2.left = false;
+    keys2.right = false;
+
+    if(document.activeElement && typeof document.activeElement.blur === "function"){
+        document.activeElement.blur();
+    }
+
     raceNumber = 1;
     raceProgress = 0;
     raceTargetDistance = RACE_CONFIG[1].target;
@@ -7396,6 +7414,31 @@ window.addEventListener(
             keys2.right = false;
 
         }
+
+    }
+
+);
+
+
+// Control fix: if the window loses focus while a movement key is held
+// (alt-tab, clicking another app), the browser will not always deliver a
+// matching keyup. Release all movement keys on blur so neither car keeps
+// moving on stale input.
+window.addEventListener(
+
+    "blur",
+
+    () => {
+
+        keys.up = false;
+        keys.down = false;
+        keys.left = false;
+        keys.right = false;
+
+        keys2.up = false;
+        keys2.down = false;
+        keys2.left = false;
+        keys2.right = false;
 
     }
 
